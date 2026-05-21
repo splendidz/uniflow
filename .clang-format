@@ -1,0 +1,24 @@
+# uniflow-cpp code style — Allman braces, 4-space indent.
+Language:        Cpp
+BasedOnStyle:    LLVM
+BreakBeforeBraces: Allman
+IndentWidth:     4
+TabWidth:        4
+UseTab:          Never
+ColumnLimit:     0
+NamespaceIndentation: None
+AccessModifierOffset: -4
+PointerAlignment: Left
+ReflowComments:  false
+SortIncludes:    false
+AlignConsecutiveAssignments:  true
+AlignConsecutiveDeclarations: true
+AlignTrailingComments: true
+AllowShortFunctionsOnASingleLine: All
+AllowShortBlocksOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+MaxEmptyLinesToKeep: 1
+KeepEmptyLinesAtTheStartOfBlocks: false
+SpaceBeforeParens: ControlStatements
+FixNamespaceComments: true
