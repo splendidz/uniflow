@@ -1,21 +1,33 @@
-// ============================================================================
-//  cnc_pickers — demo_concept.md problem 2, solved with uniflow
+// ======================================================================
+//  cnc_pickers - demo_concept.md problem 2, solved with uniflow.
 //
-//  A CNC-style line: raw parts appear at zone A (Load) at random times. Picker
-//  "AB" carries a part A -> B; the Stage machines it at B; picker "BC" carries
-//  it B -> C (Unload). Each picker has an x and a z axis. The two pickers must
-//  never share the B zone — one must clear B (by >= the safety gap) before the
-//  other enters.
+//  CNC-style line:
+//    - Raw parts appear at zone A (Load) at random intervals (1-5 s).
+//    - LoadPicker carries a raw part A -> B.
+//    - Stage (machining HW at zone B) talks to fake HW, waits for ready,
+//      processes for ~5 s, then runs a cleanup handshake and returns its
+//      table to the pick position.
+//    - UnloadPicker carries the finished part B -> C (Unload).
 //
-//  Why uniflow fits:
-//   - The two pickers are the SAME class, two instances ("AB", "BC") — exactly
-//     what UF_USES_UNIFLOW + named instances is for.
-//   - Each picker's pick/carry/place motion is a chain of steps. Motion is
-//     paced with Sleep() — smooth, and the pump never busy-spins.
-//   - Collision avoidance is a cross-module read: a picker checks the OTHER
-//     picker's x via Picker::GetInst(...). That read is safe with no lock
-//     because every module shares the one pump thread (DESIGN.md §5-10).
-//   - The Stage and the Loader are single-instance modules (UF_SINGLETON).
+//  Two pickers must never share the B zone - one must clear B (by at least
+//  the safety gap) before the other enters.
+//
+//  Architecture (what this example tries to teach):
+//    - LoadPicker and UnloadPicker are SEPARATE classes. They share helpers
+//      but their job, source/dest, and gating conditions differ enough that
+//      forcing them into one class hides intent.
+//    - The Orchestrator is a singleton module that owns line-level
+//      scheduling. Pickers and Stage do NOT decide what to do next - they
+//      execute the orchestrator's command. They expose Ready/Idle queries
+//      and accept commands via plain method calls (same pump thread, no
+//      lock needed).
+//    - Stage is a sequence of distinct steps (SendStart, WaitReady,
+//      Processing, Cleanup, MoveToPickPos). Timing is wall-clock, never
+//      frame-count. SendStart and Cleanup fan out to the thread pool via
+//      UF_ASYNC to simulate a real HW handshake.
+//    - Motion uses a MotorAxis helper exposing InPosition(), which only
+//      returns true after the axis has held the target within tolerance
+//      for a settling time - matching how real position feedback works.
 //
 //  Visualisation: a Win32 window on Windows; a console animation elsewhere.
 //
@@ -24,18 +36,32 @@
 //       /Fe:build\cnc_pickers.exe /link user32.lib gdi32.lib
 //    g++ -std=c++17 -O2 -pthread -I include ^
 //       examples/cnc_pickers/main.cpp -o build/cnc_pickers
-// ============================================================================
+// ======================================================================
 #include "uniflow.hpp"
 
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <cstring>
+#include <cstdint>
+#include <cstdio>
+#include <fstream>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <random>
+#include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
+
+using namespace std::chrono_literals;
+using uniflow::Clock;
+using uniflow::Duration;
+using uniflow::FlowStats;
+using uniflow::StepAction;
+using uniflow::TimePoint;
+using uniflow::TraceEntry;
+using uniflow::to_ms;
 
 // Visualisation backend: Win32 window on Windows, console animation elsewhere.
 // Define UNIFLOW_CONSOLE_VIZ to force the console backend on Windows too.
@@ -51,412 +77,979 @@
 #include <windows.h>
 #endif
 
-using namespace std::chrono_literals;
-using uniflow::Duration;
+// ======================================================================
+//  LineGeometry - everything dimensional about the line.
+//
+//  Constants carry their unit in the name (_mm / _ms / _mm_per_s). The
+//  static-only class is the single namespace for them: no loose globals,
+//  no surprises about what owns what.
+// ======================================================================
+class LineGeometry
+{
+public:
+    // X-axis layout (millimetres, world coordinates).
+    static constexpr double kZoneA_mm        = 200.0;  // Load
+    static constexpr double kZoneB_mm        = 700.0;  // Stage (machining)
+    static constexpr double kZoneC_mm        = 1200.0; // Unload
+    static constexpr double kXMax_mm         = 1400.0;
+    static constexpr double kBSafetyGap_mm   = 250.0;  // exclusion zone radius
+    static constexpr double kStageTravel_mm  = 80.0;   // table travel from pick pos
 
-// ── Line geometry, in millimetres ───────────────────────────────────────────
-static constexpr double kZoneA   = 200.0;  // Load
-static constexpr double kZoneB   = 700.0;  // Stage (machining)
-static constexpr double kZoneC   = 1200.0; // Unload
-static constexpr double kXMax    = 1400.0;
-static constexpr double kBClear  = 250.0;  // a picker "occupies B" within this
-static constexpr double kZUp     = 0.0;
-static constexpr double kZDown   = 120.0;
-static constexpr double kXSpeed  = 16.0;   // mm per animation frame
-static constexpr double kZSpeed  = 9.0;    // mm per animation frame
-static constexpr auto   kFrame   = 16ms;   // animation tick
-static constexpr int    kProcessFrames = 70; // Stage machining duration
+    // Z-axis (down is positive in this toy model).
+    static constexpr double kZUp_mm          = 0.0;
+    static constexpr double kZDown_mm        = 120.0;
 
-// True when x is inside the contested B zone.
-static bool InB(double x) { return std::fabs(x - kZoneB) < kBClear; }
+    // Motion speed (millimetres per second).
+    static constexpr double kXSpeed_mm_per_s = 1000.0;
+    static constexpr double kZSpeed_mm_per_s = 560.0;
 
-// ── Shutdown flag — set by the UI thread, read by module steps ──────────────
-static std::atomic<bool> g_stop{false};
+    // Tolerance + settle time for the InPosition predicate.
+    static constexpr double   kPosTolerance_mm = 0.5;
+    static constexpr Duration kPosSettleTime   = 80ms;
 
-// ── Sim state shared only between modules (all on the one pump thread, so no
-//    locks needed). The Stage owns its own state; these two are the zones. ──
-static bool g_zoneA_part = false; // a raw part is waiting at Load
-static int  g_delivered  = 0;     // finished parts at Unload
+    // True iff `x_mm` is inside the contested B zone.
+    static bool InsideZoneB(double x_mm)
+    {
+        return std::fabs(x_mm - kZoneB_mm) < kBSafetyGap_mm;
+    }
 
-// ════════════════════════════════════════════════════════════════════════════
-//  Snapshot — the ONLY cross-thread hand-off. The Viz module fills it on the
-//  pump thread; the UI thread reads a copy. One mutex, held only for the copy.
-// ════════════════════════════════════════════════════════════════════════════
+    LineGeometry() = delete;
+};
+
+// ======================================================================
+//  LineTiming - scheduling cadence (how often modules poll / re-tick).
+// ======================================================================
+class LineTiming
+{
+public:
+    static constexpr Duration kPoll_fast    = 10ms;   // motion / position polls
+    static constexpr Duration kPoll_slow    = 50ms;   // ready / state polls
+    static constexpr Duration kVizTick      = 16ms;   // visualisation cadence
+    static constexpr Duration kSchedTick    = 30ms;   // orchestrator cadence
+
+    // Raw-part inter-arrival range at zone A.
+    static constexpr Duration kLoaderMinGap = 1000ms;
+    static constexpr Duration kLoaderMaxGap = 5000ms;
+
+    LineTiming() = delete;
+};
+
+// ======================================================================
+//  LineState - line-level state several modules touch.
+// ======================================================================
+class LineState
+{
+public:
+    static bool ZoneAHasPart()    { return zone_a_part_; }
+    static void SpawnZoneAPart()  { zone_a_part_ = true; }
+    static void ConsumeZoneAPart(){ zone_a_part_ = false; }
+
+    static int  DeliveredCount()  { return delivered_; }
+    static void IncDelivered()    { ++delivered_; }
+
+    static bool Stop()        { return stop_.load(std::memory_order_relaxed); }
+    static void RequestStop() { stop_.store(true, std::memory_order_relaxed); }
+
+    LineState() = delete;
+
+private:
+    static inline bool             zone_a_part_ = false;
+    static inline int              delivered_   = 0;
+    static inline std::atomic<bool> stop_{false};
+};
+
+// ======================================================================
+//  HwSimulator - fakes the machining HW's "ready" handshake.
+//
+//  Stage calls ArmReadySignal() right after the start-command ack. A
+//  detached worker thread sleeps a random 500-2500 ms and then flips
+//  IsReady() to true AND calls uniflow::NotifyAll() so the pump leaves
+//  its cv-wait at once - no need to wait for the next idle_sleep tick.
+//
+//  This is how a real ISR-style HW callback would integrate: flip the
+//  flag, notify the runtime, done. The pump observes the new state on
+//  the very next round.
+// ======================================================================
+class HwSimulator
+{
+public:
+    static void ArmReadySignal()
+    {
+        ready_.store(false, std::memory_order_release);
+        std::thread([]
+        {
+            // thread_local RNG so concurrent arms (e.g. across cycles)
+            // do not share state.
+            static thread_local std::mt19937 rng{std::random_device{}()};
+            std::uniform_int_distribution<int> d(500, 2500);
+            int ms = d(rng);
+            std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+            ready_.store(true, std::memory_order_release);
+            uniflow::NotifyAll();
+        }).detach();
+    }
+    static bool IsReady()
+    {
+        return ready_.load(std::memory_order_acquire);
+    }
+
+    HwSimulator() = delete;
+
+private:
+    static inline std::atomic<bool> ready_{false};
+};
+
+// ======================================================================
+//  StageState - what the Stage thinks it is doing right now.
+// ======================================================================
+enum class StageState : uint8_t
+{
+    Idle,                // no raw part, no processed part
+    RawPartLoaded,       // raw part placed; processing not yet started
+    Processing,          // HW handshake running, table moving, etc.
+    ProcessedPartReady,  // machined part awaiting UnloadPicker
+};
+
+inline const char* ToString(StageState s)
+{
+    switch (s)
+    {
+    case StageState::Idle:               return "Idle";
+    case StageState::RawPartLoaded:      return "RawPartLoaded";
+    case StageState::Processing:         return "Processing";
+    case StageState::ProcessedPartReady: return "ProcessedPartReady";
+    }
+    return "?";
+}
+
+// ======================================================================
+//  MotorAxis - 1D linear axis with feedback.
+//
+//  The step layer calls Update(speed_mm_per_s) once per pump tick; the
+//  helper advances toward the latest target using the wall-clock delta
+//  since the previous Update. InPosition() returns true only after the
+//  axis has held the target within tolerance for a settling window -
+//  this is how a real position-feedback loop reports "in position".
+// ======================================================================
+class MotorAxis
+{
+public:
+    explicit MotorAxis(double initial_mm)
+        : pos_mm_(initial_mm), target_mm_(initial_mm),
+          last_update_at_(Clock::now())
+    {}
+
+    void SetTarget(double target_mm)
+    {
+        if (target_mm == target_mm_)
+            return;
+        target_mm_ = target_mm;
+        in_window_since_.reset();
+    }
+
+    // Advance the axis by one pump tick toward the current target.
+    void Update(double speed_mm_per_s)
+    {
+        auto   now  = Clock::now();
+        double dt_s = std::chrono::duration<double>(now - last_update_at_).count();
+        last_update_at_ = now;
+
+        double remaining = target_mm_ - pos_mm_;
+        double step      = speed_mm_per_s * dt_s;
+        if (std::fabs(remaining) <= step)
+            pos_mm_ = target_mm_;
+        else
+            pos_mm_ += (remaining > 0 ? step : -step);
+    }
+
+    // True only after the axis has been within `tol` of the target for at
+    // least `settle`. Reset whenever SetTarget moves the goalpost.
+    bool InPosition(double tol_mm = LineGeometry::kPosTolerance_mm,
+                    Duration settle = LineGeometry::kPosSettleTime) const
+    {
+        if (std::fabs(pos_mm_ - target_mm_) > tol_mm)
+        {
+            in_window_since_.reset();
+            return false;
+        }
+        auto now = Clock::now();
+        if (!in_window_since_)
+            in_window_since_ = now;
+        return (now - *in_window_since_) >= settle;
+    }
+
+    double Position() const { return pos_mm_; }
+    double Target()   const { return target_mm_; }
+
+private:
+    double                           pos_mm_;
+    double                           target_mm_;
+    TimePoint                        last_update_at_;
+    mutable std::optional<TimePoint> in_window_since_;
+};
+
+// ======================================================================
+//  Snapshot - the one cross-thread hand-off (pump -> UI thread).
+// ======================================================================
 struct Snapshot
 {
-    double      ab_x = kZoneA, ab_z = kZUp;
-    double      bc_x = kZoneC, bc_z = kZUp;
-    bool        ab_carry = false, bc_carry = false;
-    std::string ab_phase = "-", bc_phase = "-";
-    double      stage_x = kZoneB, stage_y = 0.0;
-    int         stage_state = 0; // 0 empty 1 loaded 2 machining 3 done
-    bool        zoneA_part = false;
-    int         delivered  = 0;
+    double      load_x_mm  = LineGeometry::kZoneA_mm;
+    double      load_z_mm  = LineGeometry::kZUp_mm;
+    bool        load_carry = false;
+    std::string load_phase = "-";
+
+    double      unload_x_mm  = LineGeometry::kZoneC_mm;
+    double      unload_z_mm  = LineGeometry::kZUp_mm;
+    bool        unload_carry = false;
+    std::string unload_phase = "-";
+
+    double      stage_table_x_mm = LineGeometry::kZoneB_mm;
+    double      stage_table_y_mm = 0.0;
+    StageState  stage_state      = StageState::Idle;
+    std::string stage_phase      = "-";
+
+    bool zoneA_has_part = false;
+    int  delivered      = 0;
 };
 static Snapshot   g_snap;
 static std::mutex g_snap_mu;
 
-// ════════════════════════════════════════════════════════════════════════════
-//  Stage — the machine at zone B. Single instance.
-// ════════════════════════════════════════════════════════════════════════════
+// ======================================================================
+//  Forward declarations - the two pickers reference each other.
+// ======================================================================
+class LoadPicker;
+class UnloadPicker;
+
+// ======================================================================
+//  Stage - the machining cell at zone B. Single instance.
+//
+//  Lifecycle is a sequence of flows started by the Orchestrator. One flow
+//  == one part processed. The flow runs:
+//
+//    SendStartHwCommand (async, ~1 s)
+//    WaitHwReady        (poll, ~1 s)
+//    Processing         (~5 s, time-based)
+//    SendCleanupCommand (async, ~0.5s)
+//    MoveToPickPos                 - retract table, InPosition wait
+//    -> Done; state becomes ProcessedPartReady
+//
+//  Pickers call ReadyToReceiveRawPart / ReadyToHandOffProcessedPart and
+//  never touch the Stage's internal phase.
+// ======================================================================
 class Stage : public uniflow::Uniflow<Stage>
 {
     UF_SINGLETON(Stage);
+    //
+    // === SINGLE INSTANCE: exactly one Stage cell at zone B. ===
+    //
+    // UF_SINGLETON above is not boilerplate - it encodes a hardware
+    // assumption. A second instance would be a logic error and the macro
+    // prevents it at compile time.
+    //
 
 public:
-    StepResult OnRun_Begin() { return UF_NEXT(OnRun_Idle); }
-
-    // ── Queried by the pickers (same pump thread — no lock) ──
-    bool CanReceive() const { return state_ == 0; } // empty
-    bool CanPickup() const { return state_ == 3; }  // machined, awaiting BC
-    void Receive() { state_ = 1; }                  // AB placed a raw part
-    void Pickup() { state_ = 0; }                   // BC took the part
-
-    int    state() const { return state_; }
-    double mx() const { return mx_; }
-    double my() const { return my_; }
-
-private:
-    StepResult OnRun_Idle()
-    {
-        if (g_stop)
-            return Done();
-        if (state_ == 1) // a raw part was placed — start machining
-        {
-            state_   = 2;
-            frame_   = 0;
-            return UF_NEXT(OnRun_Machine);
-        }
-        return Sleep(kFrame); // nothing to do — re-check, paced
-    }
-
-    StepResult OnRun_Machine()
-    {
-        if (g_stop)
-            return Done();
-        // Animate the x/y table tracing a little machining pattern.
-        double t = frame_ / static_cast<double>(kProcessFrames);
-        mx_      = kZoneB + 60.0 * std::sin(t * 6.283 * 2.0);
-        my_      = 40.0 * std::sin(t * 6.283 * 3.0);
-        if (++frame_ >= kProcessFrames)
-        {
-            mx_    = kZoneB;
-            my_    = 0.0;
-            state_ = 3; // done — BC may now pick it up
-            return UF_NEXT(OnRun_Idle);
-        }
-        return Sleep(kFrame);
-    }
-
-    int    state_ = 0;
-    int    frame_ = 0;
-    double mx_    = kZoneB;
-    double my_    = 0.0;
-};
-
-// ════════════════════════════════════════════════════════════════════════════
-//  Picker — one class, two instances. AB carries A->B, BC carries B->C.
-// ════════════════════════════════════════════════════════════════════════════
-class Picker : public uniflow::Uniflow<Picker>
-{
-    UF_USES_UNIFLOW(Picker);
-
-public:
-    enum class Role { LoadToStage, StageToUnload };
-
-    // Entry step — the role decides this picker's zones and partner.
-    StepResult OnRun_Begin(Role role)
-    {
-        role_ = role;
-        if (role == Role::LoadToStage)
-        {
-            src_x_ = kZoneA; dst_x_ = kZoneB; home_x_ = kZoneA;
-            other_ = "BC";
-        }
-        else
-        {
-            src_x_ = kZoneB; dst_x_ = kZoneC; home_x_ = kZoneC;
-            other_ = "AB";
-        }
-        x_ = home_x_;
-        return UF_NEXT(OnCycle);
-    }
-
-    // ── Read by the Viz module and the partner picker (same pump thread) ──
-    double      x() const { return x_; }
-    double      z() const { return z_; }
-    bool        carrying() const { return carry_; }
+    StageState  state() const { return state_; }
     const char* phase() const { return phase_; }
+    double      TableX_mm() const { return table_x_axis_.Position(); }
+    double      TableY_mm() const { return table_y_offset_mm_; }
+
+    bool ReadyToReceiveRawPart() const
+    {
+        return state_ == StageState::Idle;
+    }
+    bool ReadyToHandOffProcessedPart() const
+    {
+        return state_ == StageState::ProcessedPartReady;
+    }
+
+    void OnRawPartReceived()
+    {
+        state_ = StageState::RawPartLoaded;
+        phase_ = "raw part loaded";
+    }
+    void OnProcessedPartTaken()
+    {
+        state_ = StageState::Idle;
+        phase_ = "empty";
+    }
+
+    // Entry: the Orchestrator starts this flow when state is RawPartLoaded.
+    StepResult OnProcess_Begin()
+    {
+        if (state_ != StageState::RawPartLoaded)
+            return Fail();
+        state_ = StageState::Processing;
+        phase_ = "send start cmd";
+        return UF_NEXT(OnProcess_SendStartCmd);
+    }
+
+    StepResult OnProcess_SendStartCmd()
+    {
+        if (LineState::Stop())
+            return Done();
+        UF_ASYNC(SimulateStartCmd);
+        return UF_NEXT(OnProcess_WaitStartCmdAck);
+    }
+    StepResult OnProcess_WaitStartCmdAck()
+    {
+        auto r = AsyncResult<bool>();
+        if (r.failed() || r.is_timeout() || !r.value())
+        {
+            phase_ = "start cmd failed";
+            return Fail();
+        }
+        phase_ = "wait hw ready";
+        // Kick off the fake HW ready handshake: a worker thread will set
+        // HwSimulator::IsReady() to true at a random time within 0.5-2.5 s
+        // and call uniflow::NotifyAll() so we wake immediately on it.
+        HwSimulator::ArmReadySignal();
+        return UF_NEXT(OnProcess_WaitHwReady, uniflow::UFTimer{});
+    }
+    StepResult OnProcess_WaitHwReady(uniflow::UFTimer& t)
+    {
+        if (LineState::Stop())              return Done();
+        if (t.TimedOut(3000ms))             { phase_ = "hw ready timeout";
+                                              return Fail(); }
+        if (!HwSimulator::IsReady())        return Wait();   // poll cadence: default
+
+        phase_             = "processing";
+        table_y_offset_mm_ = 0.0;
+        table_x_axis_.SetTarget(LineGeometry::kZoneB_mm
+                                + LineGeometry::kStageTravel_mm);
+        return UF_NEXT(OnProcess_Run, uniflow::UFTimer{});
+    }
+
+    StepResult OnProcess_Run(uniflow::UFTimer& t)
+    {
+        if (LineState::Stop())
+            return Done();
+        // Stay() / Wait() re-enter THIS step fn: by-ref signature means we
+        // touch the SAME UFTimer instance stored in the next-step capture
+        // tuple every time, so Elapsed() keeps growing from the moment the
+        // step was first armed (and any t.Restart() would persist too).
+        auto elapsed = t.Elapsed();
+        double frac =
+            std::chrono::duration<double>(elapsed).count()
+            / std::chrono::duration<double>(kProcessDuration).count();
+        if (frac > 1.0) frac = 1.0;
+        double sweep_mm =
+            LineGeometry::kStageTravel_mm * std::sin(frac * 6.283 * 2.0);
+        table_x_axis_.SetTarget(LineGeometry::kZoneB_mm + sweep_mm);
+        table_y_offset_mm_ = 40.0 * std::sin(frac * 6.283 * 3.0);
+        table_x_axis_.Update(LineGeometry::kXSpeed_mm_per_s);
+
+        if (elapsed >= kProcessDuration)
+        {
+            phase_ = "send cleanup cmd";
+            return UF_NEXT(OnProcess_SendCleanupCmd);
+        }
+        return Wait(LineTiming::kPoll_fast);
+    }
+
+    StepResult OnProcess_SendCleanupCmd()
+    {
+        if (LineState::Stop())
+            return Done();
+        UF_ASYNC(SimulateCleanupCmd);
+        return UF_NEXT(OnProcess_WaitCleanupAck);
+    }
+    StepResult OnProcess_WaitCleanupAck()
+    {
+        auto r = AsyncResult<bool>();
+        if (r.failed() || r.is_timeout() || !r.value())
+        {
+            phase_ = "cleanup failed";
+            return Fail();
+        }
+        phase_ = "return to pick pos";
+        table_x_axis_.SetTarget(LineGeometry::kZoneB_mm);
+        return UF_NEXT(OnProcess_ReturnToPickPos);
+    }
+    StepResult OnProcess_ReturnToPickPos()
+    {
+        if (LineState::Stop())
+            return Done();
+        table_x_axis_.Update(LineGeometry::kXSpeed_mm_per_s);
+        table_y_offset_mm_ = 0.0;
+        if (!table_x_axis_.InPosition())
+            return Wait(LineTiming::kPoll_fast);
+
+        state_ = StageState::ProcessedPartReady;
+        phase_ = "ready to hand off";
+        return Done();
+    }
+
+    // ---- Static workers handed to UF_ASYNC ---------------------------
+    static bool SimulateStartCmd()
+    {
+        std::this_thread::sleep_for(1000ms);
+        return true;
+    }
+    static bool SimulateCleanupCmd()
+    {
+        std::this_thread::sleep_for(500ms);
+        return true;
+    }
 
 private:
-    StepResult OnCycle()
-    {
-        if (g_stop)
-            return Done();
-        phase_ = "wait part";
-        return UF_NEXT(OnWaitSource);
-    }
+    static constexpr Duration kProcessDuration = 5000ms;
 
-    // Wait until there is something to pick up at the source zone.
-    StepResult OnWaitSource()
-    {
-        if (g_stop)
-            return Done();
-        if (!SourceReady())
-            return Sleep(kFrame);
-        return UF_NEXT(OnGoSource);
-    }
+    StageState  state_ = StageState::Idle;
+    const char* phase_ = "empty";
 
-    StepResult OnGoSource()
-    {
-        if (g_stop)
-            return Done();
-        phase_ = "-> source";
-        // BC's source IS the B zone, so entering it needs B clear.
-        bool clear = (role_ == Role::StageToUnload)
-                         ? (Stage::inst().CanPickup() && !PartnerInB())
-                         : true;
-        if (MoveX(src_x_, clear))
-            return UF_NEXT(OnPickDown);
-        return Sleep(kFrame);
-    }
-
-    StepResult OnPickDown()
-    {
-        if (MoveZ(kZDown))
-        {
-            // Grab the part: clear the source, mark this picker loaded.
-            if (role_ == Role::LoadToStage)
-                g_zoneA_part = false;
-            else
-                Stage::inst().Pickup();
-            carry_ = true;
-            return UF_NEXT(OnPickUp);
-        }
-        phase_ = "pick v";
-        return Sleep(kFrame);
-    }
-
-    StepResult OnPickUp()
-    {
-        phase_ = "pick ^";
-        if (MoveZ(kZUp))
-            return UF_NEXT(OnGoDest);
-        return Sleep(kFrame);
-    }
-
-    StepResult OnGoDest()
-    {
-        if (g_stop)
-            return Done();
-        phase_ = "-> dest";
-        // AB's destination is the B zone — enter it only when the Stage is
-        // free AND the partner has cleared B. This is the collision rule.
-        bool clear = (role_ == Role::LoadToStage)
-                         ? (Stage::inst().CanReceive() && !PartnerInB())
-                         : true;
-        if (!clear && !InB(x_))
-            phase_ = "wait B";
-        if (MoveX(dst_x_, clear))
-            return UF_NEXT(OnPlaceDown);
-        return Sleep(kFrame);
-    }
-
-    StepResult OnPlaceDown()
-    {
-        if (MoveZ(kZDown))
-        {
-            // Release the part at the destination zone.
-            if (role_ == Role::LoadToStage)
-                Stage::inst().Receive();
-            else
-                ++g_delivered;
-            carry_ = false;
-            return UF_NEXT(OnPlaceUp);
-        }
-        phase_ = "place v";
-        return Sleep(kFrame);
-    }
-
-    StepResult OnPlaceUp()
-    {
-        phase_ = "place ^";
-        if (MoveZ(kZUp))
-            return UF_NEXT(OnRetreat);
-        return Sleep(kFrame);
-    }
-
-    // Retreat to the home position — this is what clears the B zone for the
-    // partner picker.
-    StepResult OnRetreat()
-    {
-        if (g_stop)
-            return Done();
-        phase_ = "retreat";
-        if (MoveX(home_x_, /*clear=*/true))
-            return UF_NEXT(OnCycle);
-        return Sleep(kFrame);
-    }
-
-    // ── helpers ──
-    bool SourceReady() const
-    {
-        return (role_ == Role::LoadToStage) ? g_zoneA_part
-                                            : Stage::inst().CanPickup();
-    }
-    // Is the partner picker currently occupying the B zone?
-    bool PartnerInB() const { return InB(Picker::GetInst(other_).x()); }
-
-    // Move x one frame toward `target`. A move that would ENTER the B zone is
-    // held back unless `clear_to_enter_B` is true. Returns true on arrival.
-    bool MoveX(double target, bool clear_to_enter_B)
-    {
-        double dir = (target > x_) ? 1.0 : -1.0;
-        double nx  = x_ + dir * kXSpeed;
-        if ((dir > 0 && nx > target) || (dir < 0 && nx < target))
-            nx = target;
-        if (!InB(x_) && InB(nx) && !clear_to_enter_B)
-            return false; // hold outside B — no collision allowed
-        x_ = nx;
-        return x_ == target;
-    }
-    bool MoveZ(double target)
-    {
-        double dir = (target > z_) ? 1.0 : -1.0;
-        double nz  = z_ + dir * kZSpeed;
-        if ((dir > 0 && nz > target) || (dir < 0 && nz < target))
-            nz = target;
-        z_ = nz;
-        return z_ == target;
-    }
-
-    Role        role_   = Role::LoadToStage;
-    double      x_      = kZoneA;
-    double      z_      = kZUp;
-    bool        carry_  = false;
-    double      src_x_  = kZoneA;
-    double      dst_x_  = kZoneB;
-    double      home_x_ = kZoneA;
-    const char* other_  = "BC";
-    const char* phase_  = "-";
+    // Timing state moved into UFTimer instances threaded through the step
+    // chain (see OnProcess_WaitHwReady / OnProcess_Run signatures).
+    MotorAxis   table_x_axis_{LineGeometry::kZoneB_mm};
+    double      table_y_offset_mm_ = 0.0;
 };
 
-// ════════════════════════════════════════════════════════════════════════════
-//  Loader — drops a raw part at zone A at random intervals. Single instance.
-// ════════════════════════════════════════════════════════════════════════════
-class Loader : public uniflow::Uniflow<Loader>
+// ======================================================================
+//  PickerMotion - shared motion + phase state (not a Uniflow base).
+//
+//  Composed by inheritance into LoadPicker and UnloadPicker. Kept off the
+//  Uniflow CRTP base because that base is templated on Derived.
+// ======================================================================
+class PickerMotion
 {
-    UF_SINGLETON(Loader);
+public:
+    explicit PickerMotion(double home_x_mm)
+        : x_axis_(home_x_mm), z_axis_(LineGeometry::kZUp_mm)
+    {}
+
+    double      X_mm()     const { return x_axis_.Position(); }
+    double      Z_mm()     const { return z_axis_.Position(); }
+    bool        Carrying() const { return carrying_; }
+    const char* Phase()    const { return phase_; }
+
+    bool InsideZoneB() const { return LineGeometry::InsideZoneB(X_mm()); }
+
+protected:
+    void SetPhase(const char* p) { phase_ = p; }
+    void SetCarrying(bool v)     { carrying_ = v; }
+
+    MotorAxis   x_axis_;
+    MotorAxis   z_axis_;
+    bool        carrying_ = false;
+    const char* phase_    = "idle";
+};
+
+// ======================================================================
+//  LoadPicker - carries a raw part A -> B.
+//
+//  One flow == one A->B->A round trip. The Orchestrator launches this
+//  picker when zone A has a part and the picker is Idle. The picker
+//  itself decides to hold at the B-safety-gap boundary if Stage is not
+//  yet ready to receive (this gives the "prefetch + wait" behaviour).
+// ======================================================================
+class LoadPicker : public uniflow::Uniflow<LoadPicker>,
+                   public PickerMotion
+{
+    UF_USES_UNIFLOW(LoadPicker);
 
 public:
-    StepResult OnRun_Begin() { return UF_NEXT(OnArm); }
+    LoadPicker()
+        : uniflow::Uniflow<LoadPicker>("LoadPicker"),
+          PickerMotion(LineGeometry::kZoneA_mm)
+    {}
+
+    StepResult OnLoad_Begin()
+    {
+        SetPhase("load: start");
+        return UF_NEXT(OnLoad_GoToSource);
+    }
+    StepResult OnLoad_GoToSource()
+    {
+        if (LineState::Stop()) return Done();
+        SetPhase("load: -> A");
+        x_axis_.SetTarget(LineGeometry::kZoneA_mm);
+        x_axis_.Update(LineGeometry::kXSpeed_mm_per_s);
+        if (!x_axis_.InPosition())
+            return Wait(LineTiming::kPoll_fast);
+        return UF_NEXT(OnLoad_DescendToPick);
+    }
+    StepResult OnLoad_DescendToPick()
+    {
+        if (LineState::Stop()) return Done();
+        SetPhase("load: pick v");
+        z_axis_.SetTarget(LineGeometry::kZDown_mm);
+        z_axis_.Update(LineGeometry::kZSpeed_mm_per_s);
+        if (!z_axis_.InPosition())
+            return Wait(LineTiming::kPoll_fast);
+
+        LineState::ConsumeZoneAPart();
+        SetCarrying(true);
+        return UF_NEXT(OnLoad_RisingWithPart);
+    }
+    StepResult OnLoad_RisingWithPart()
+    {
+        if (LineState::Stop()) return Done();
+        SetPhase("load: pick ^");
+        z_axis_.SetTarget(LineGeometry::kZUp_mm);
+        z_axis_.Update(LineGeometry::kZSpeed_mm_per_s);
+        if (!z_axis_.InPosition())
+            return Wait(LineTiming::kPoll_fast);
+        return UF_NEXT(OnLoad_GoToDest);
+    }
+    StepResult OnLoad_GoToDest()
+    {
+        if (LineState::Stop()) return Done();
+        // Gate entry into the B exclusion zone: Stage must be ready AND
+        // the partner picker must not be inside the gap.
+        bool may_enter_B =
+            Stage::inst().ReadyToReceiveRawPart() && !PartnerInZoneB();
+
+        if (!InsideZoneB() && !may_enter_B)
+        {
+            SetPhase("load: wait B clear");
+            // Hold at the A-side gap boundary.
+            x_axis_.SetTarget(LineGeometry::kZoneB_mm
+                              - LineGeometry::kBSafetyGap_mm);
+            x_axis_.Update(LineGeometry::kXSpeed_mm_per_s);
+            return Wait(LineTiming::kPoll_slow);
+        }
+        SetPhase("load: -> B");
+        x_axis_.SetTarget(LineGeometry::kZoneB_mm);
+        x_axis_.Update(LineGeometry::kXSpeed_mm_per_s);
+        if (!x_axis_.InPosition())
+            return Wait(LineTiming::kPoll_fast);
+        return UF_NEXT(OnLoad_DescendToPlace);
+    }
+    StepResult OnLoad_DescendToPlace()
+    {
+        if (LineState::Stop()) return Done();
+        SetPhase("load: place v");
+        z_axis_.SetTarget(LineGeometry::kZDown_mm);
+        z_axis_.Update(LineGeometry::kZSpeed_mm_per_s);
+        if (!z_axis_.InPosition())
+            return Wait(LineTiming::kPoll_fast);
+
+        Stage::inst().OnRawPartReceived();
+        SetCarrying(false);
+        return UF_NEXT(OnLoad_RisingEmpty);
+    }
+    StepResult OnLoad_RisingEmpty()
+    {
+        if (LineState::Stop()) return Done();
+        SetPhase("load: place ^");
+        z_axis_.SetTarget(LineGeometry::kZUp_mm);
+        z_axis_.Update(LineGeometry::kZSpeed_mm_per_s);
+        if (!z_axis_.InPosition())
+            return Wait(LineTiming::kPoll_fast);
+        return UF_NEXT(OnLoad_Retreat);
+    }
+    StepResult OnLoad_Retreat()
+    {
+        if (LineState::Stop()) return Done();
+        SetPhase("load: retreat");
+        x_axis_.SetTarget(LineGeometry::kZoneA_mm);
+        x_axis_.Update(LineGeometry::kXSpeed_mm_per_s);
+        if (!x_axis_.InPosition())
+            return Wait(LineTiming::kPoll_fast);
+        SetPhase("load: idle");
+        return Done();
+    }
 
 private:
-    StepResult OnArm()
-    {
-        if (g_stop)
-            return Done();
-        std::uniform_int_distribution<int> d(400, 1200);
-        due_ = uniflow::Clock::now() + std::chrono::milliseconds(d(rng_));
-        return UF_NEXT(OnWait);
-    }
-    StepResult OnWait()
-    {
-        if (g_stop)
-            return Done();
-        if (uniflow::Clock::now() < due_)
-            return Sleep(kFrame);
-        // Drop a part only if Load is free; otherwise wait for AB to take it.
-        if (!g_zoneA_part)
-        {
-            g_zoneA_part = true;
-            return UF_NEXT(OnArm);
-        }
-        return Sleep(kFrame);
-    }
-
-    std::mt19937            rng_{12345};
-    uniflow::TimePoint      due_;
+    // Defined out-of-line: UnloadPicker must be complete first.
+    bool PartnerInZoneB() const;
 };
 
-// ════════════════════════════════════════════════════════════════════════════
-//  Viz — snapshots the whole line into g_snap every frame. It only reads other
-//  modules (safe — same pump thread) and writes the snapshot under one mutex.
-// ════════════════════════════════════════════════════════════════════════════
+// ======================================================================
+//  UnloadPicker - carries the finished part B -> C.
+//
+//  Same shape as LoadPicker but the SOURCE is the contested B zone, so
+//  the entry-to-B check happens on the way in (not just on the dest dip).
+// ======================================================================
+class UnloadPicker : public uniflow::Uniflow<UnloadPicker>,
+                     public PickerMotion
+{
+    UF_USES_UNIFLOW(UnloadPicker);
+
+public:
+    UnloadPicker()
+        : uniflow::Uniflow<UnloadPicker>("UnloadPicker"),
+          PickerMotion(LineGeometry::kZoneC_mm)
+    {}
+
+    StepResult OnUnload_Begin()
+    {
+        SetPhase("unload: start");
+        return UF_NEXT(OnUnload_GoToStage);
+    }
+    StepResult OnUnload_GoToStage()
+    {
+        if (LineState::Stop()) return Done();
+        bool may_enter_B =
+            Stage::inst().ReadyToHandOffProcessedPart() && !PartnerInZoneB();
+
+        if (!InsideZoneB() && !may_enter_B)
+        {
+            SetPhase("unload: wait B clear");
+            x_axis_.SetTarget(LineGeometry::kZoneB_mm
+                              + LineGeometry::kBSafetyGap_mm);
+            x_axis_.Update(LineGeometry::kXSpeed_mm_per_s);
+            return Wait(LineTiming::kPoll_slow);
+        }
+        SetPhase("unload: -> B");
+        x_axis_.SetTarget(LineGeometry::kZoneB_mm);
+        x_axis_.Update(LineGeometry::kXSpeed_mm_per_s);
+        if (!x_axis_.InPosition())
+            return Wait(LineTiming::kPoll_fast);
+        return UF_NEXT(OnUnload_DescendToPick);
+    }
+    StepResult OnUnload_DescendToPick()
+    {
+        if (LineState::Stop()) return Done();
+        SetPhase("unload: pick v");
+        z_axis_.SetTarget(LineGeometry::kZDown_mm);
+        z_axis_.Update(LineGeometry::kZSpeed_mm_per_s);
+        if (!z_axis_.InPosition())
+            return Wait(LineTiming::kPoll_fast);
+
+        Stage::inst().OnProcessedPartTaken();
+        SetCarrying(true);
+        return UF_NEXT(OnUnload_RisingWithPart);
+    }
+    StepResult OnUnload_RisingWithPart()
+    {
+        if (LineState::Stop()) return Done();
+        SetPhase("unload: pick ^");
+        z_axis_.SetTarget(LineGeometry::kZUp_mm);
+        z_axis_.Update(LineGeometry::kZSpeed_mm_per_s);
+        if (!z_axis_.InPosition())
+            return Wait(LineTiming::kPoll_fast);
+        return UF_NEXT(OnUnload_GoToUnload);
+    }
+    StepResult OnUnload_GoToUnload()
+    {
+        if (LineState::Stop()) return Done();
+        SetPhase("unload: -> C");
+        x_axis_.SetTarget(LineGeometry::kZoneC_mm);
+        x_axis_.Update(LineGeometry::kXSpeed_mm_per_s);
+        if (!x_axis_.InPosition())
+            return Wait(LineTiming::kPoll_fast);
+        return UF_NEXT(OnUnload_DescendToPlace);
+    }
+    StepResult OnUnload_DescendToPlace()
+    {
+        if (LineState::Stop()) return Done();
+        SetPhase("unload: place v");
+        z_axis_.SetTarget(LineGeometry::kZDown_mm);
+        z_axis_.Update(LineGeometry::kZSpeed_mm_per_s);
+        if (!z_axis_.InPosition())
+            return Wait(LineTiming::kPoll_fast);
+
+        LineState::IncDelivered();
+        SetCarrying(false);
+        return UF_NEXT(OnUnload_RisingEmpty);
+    }
+    StepResult OnUnload_RisingEmpty()
+    {
+        if (LineState::Stop()) return Done();
+        SetPhase("unload: place ^");
+        z_axis_.SetTarget(LineGeometry::kZUp_mm);
+        z_axis_.Update(LineGeometry::kZSpeed_mm_per_s);
+        if (!z_axis_.InPosition())
+            return Wait(LineTiming::kPoll_fast);
+        return UF_NEXT(OnUnload_Retreat);
+    }
+    StepResult OnUnload_Retreat()
+    {
+        if (LineState::Stop()) return Done();
+        SetPhase("unload: retreat");
+        x_axis_.SetTarget(LineGeometry::kZoneC_mm);
+        x_axis_.Update(LineGeometry::kXSpeed_mm_per_s);
+        if (!x_axis_.InPosition())
+            return Wait(LineTiming::kPoll_fast);
+        SetPhase("unload: idle");
+        return Done();
+    }
+
+private:
+    bool PartnerInZoneB() const;
+};
+
+// Cross-picker queries: both classes must be complete first.
+inline bool LoadPicker::PartnerInZoneB() const
+{
+    return UnloadPicker::GetInst().InsideZoneB();
+}
+inline bool UnloadPicker::PartnerInZoneB() const
+{
+    return LoadPicker::GetInst().InsideZoneB();
+}
+
+// ======================================================================
+//  Orchestrator - the line-level scheduler.
+//
+//  Owns ALL scheduling decisions:
+//    - Spawning raw parts at zone A (the old Loader module, absorbed -
+//      "a part appears" is a single decision, no flow needed).
+//    - Kicking off LoadPicker / UnloadPicker / Stage flows when their
+//      precondition is satisfied.
+//
+//  Pickers and Stage never decide what to do next.
+// ======================================================================
+class Orchestrator : public uniflow::Uniflow<Orchestrator>
+{
+    UF_SINGLETON(Orchestrator);
+
+public:
+    StepResult OnSchedule_Begin()
+    {
+        ArmNextLoaderSpawn();
+        return UF_NEXT(OnSchedule_Tick);
+    }
+
+    StepResult OnSchedule_Tick()
+    {
+        if (LineState::Stop())
+            return Done();
+
+        MaybeSpawnRawPart();
+        MaybeStartLoadPicker();
+        MaybeStartStageProcessing();
+        MaybeStartUnloadPicker();
+
+        return Wait(LineTiming::kSchedTick);
+    }
+
+private:
+    void ArmNextLoaderSpawn()
+    {
+        auto min_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          LineTiming::kLoaderMinGap).count();
+        auto max_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          LineTiming::kLoaderMaxGap).count();
+        std::uniform_int_distribution<long long> d(min_ms, max_ms);
+        next_spawn_at_ = Clock::now() + std::chrono::milliseconds(d(rng_));
+    }
+    void MaybeSpawnRawPart()
+    {
+        if (LineState::ZoneAHasPart())
+            return;
+        if (Clock::now() < next_spawn_at_)
+            return;
+        LineState::SpawnZoneAPart();
+        ArmNextLoaderSpawn();
+    }
+
+    void MaybeStartLoadPicker()
+    {
+        auto& picker = LoadPicker::GetInst();
+        if (!picker.IsIdle())
+            return;
+        if (!LineState::ZoneAHasPart())
+            return;
+        // Launch even if Stage is not yet Idle - the picker will park at
+        // the B-zone boundary. This is the "prefetch" behaviour the old
+        // version was missing.
+        picker.StartFlow(&LoadPicker::OnLoad_Begin);
+    }
+    void MaybeStartUnloadPicker()
+    {
+        auto& picker = UnloadPicker::GetInst();
+        if (!picker.IsIdle())
+            return;
+        auto st = Stage::inst().state();
+        if (st != StageState::Processing && st != StageState::ProcessedPartReady)
+            return;
+        picker.StartFlow(&UnloadPicker::OnUnload_Begin);
+    }
+    void MaybeStartStageProcessing()
+    {
+        auto& stage = Stage::inst();
+        if (!stage.IsIdle())
+            return;
+        if (stage.state() != StageState::RawPartLoaded)
+            return;
+        stage.StartFlow(&Stage::OnProcess_Begin);
+    }
+
+    std::mt19937 rng_{std::random_device{}()};
+    TimePoint    next_spawn_at_;
+};
+
+// ======================================================================
+//  Viz - snapshots the whole line into g_snap every frame.
+// ======================================================================
 class Viz : public uniflow::Uniflow<Viz>
 {
     UF_SINGLETON(Viz);
 
 public:
-    StepResult OnRun_Begin() { return UF_NEXT(OnTick); }
+    StepResult OnViz_Begin() { return UF_NEXT(OnViz_Tick); }
 
-private:
-    StepResult OnTick()
+    StepResult OnViz_Tick()
     {
-        if (g_stop)
+        if (LineState::Stop())
             return Done();
-        const Picker& ab = Picker::GetInst("AB");
-        const Picker& bc = Picker::GetInst("BC");
-        const Stage&  st = Stage::inst();
+        const auto& load   = LoadPicker::GetInst();
+        const auto& unload = UnloadPicker::GetInst();
+        const auto& stage  = Stage::inst();
         {
             std::lock_guard<std::mutex> lk(g_snap_mu);
-            g_snap.ab_x       = ab.x();
-            g_snap.ab_z       = ab.z();
-            g_snap.ab_carry   = ab.carrying();
-            g_snap.ab_phase   = ab.phase();
-            g_snap.bc_x       = bc.x();
-            g_snap.bc_z       = bc.z();
-            g_snap.bc_carry   = bc.carrying();
-            g_snap.bc_phase   = bc.phase();
-            g_snap.stage_x    = st.mx();
-            g_snap.stage_y    = st.my();
-            g_snap.stage_state = st.state();
-            g_snap.zoneA_part = g_zoneA_part;
-            g_snap.delivered  = g_delivered;
+            g_snap.load_x_mm        = load.X_mm();
+            g_snap.load_z_mm        = load.Z_mm();
+            g_snap.load_carry       = load.Carrying();
+            g_snap.load_phase       = load.Phase();
+            g_snap.unload_x_mm      = unload.X_mm();
+            g_snap.unload_z_mm      = unload.Z_mm();
+            g_snap.unload_carry     = unload.Carrying();
+            g_snap.unload_phase     = unload.Phase();
+            g_snap.stage_table_x_mm = stage.TableX_mm();
+            g_snap.stage_table_y_mm = stage.TableY_mm();
+            g_snap.stage_state      = stage.state();
+            g_snap.stage_phase      = stage.phase();
+            g_snap.zoneA_has_part   = LineState::ZoneAHasPart();
+            g_snap.delivered        = LineState::DeliveredCount();
         }
-        return Sleep(kFrame);
+        return Wait(LineTiming::kVizTick);
     }
 };
 
-// Read a consistent copy of the line state.
+// Read a consistent copy of the line state from the UI thread.
 static Snapshot ReadSnapshot()
 {
     std::lock_guard<std::mutex> lk(g_snap_mu);
     return g_snap;
 }
 
-// Start every module's flow. Called once before the UI loop.
+// ======================================================================
+//  LineLogObserver - mirrors flow events to console AND to a log file.
+//
+//  The file is opened and closed on every emission. Slow, but the line
+//  can never be lost on a crash. Time cost was explicitly OK.
+// ======================================================================
+class LineLogObserver : public uniflow::IUniflowObserver
+{
+public:
+    explicit LineLogObserver(std::string file_path)
+        : path_(std::move(file_path))
+    {}
+
+    void OnFlowStarted(std::string_view obj) override
+    {
+        Emit(obj, "FLOW START", "");
+    }
+    void OnStepRan(std::string_view obj, std::string_view step,
+                   int ordinal, Duration cpu) override
+    {
+        std::ostringstream os;
+        os << "#" << ordinal << " " << step << " cpu=" << FmtMs(cpu);
+        Emit(obj, "STEP", os.str());
+    }
+    void OnAsyncSubmitted(std::string_view obj, std::string_view step,
+                          std::string_view job) override
+    {
+        std::ostringstream os;
+        os << job << " (from " << step << ")";
+        Emit(obj, "ASYNC SUBMIT", os.str());
+    }
+    void OnAsyncCompleted(std::string_view obj, std::string_view job,
+                          Duration wait, bool had_error, bool timed_out) override
+    {
+        std::ostringstream os;
+        os << job << " wait=" << FmtMs(wait);
+        if (timed_out)      os << " [TIMEOUT]";
+        else if (had_error) os << " [ERROR]";
+        else                os << " [ok]";
+        Emit(obj, "ASYNC DONE", os.str());
+    }
+    void OnSlowCpuStep(std::string_view obj, std::string_view step,
+                       Duration cpu) override
+    {
+        std::ostringstream os;
+        os << "SLOW CPU step " << step << " took " << FmtMs(cpu);
+        Emit(obj, "WARN", os.str());
+    }
+    void OnSlowAsync(std::string_view obj, std::string_view job,
+                     Duration wait_so_far) override
+    {
+        std::ostringstream os;
+        os << "SLOW ASYNC " << job << " still pending after "
+           << FmtMs(wait_so_far);
+        Emit(obj, "WARN", os.str());
+    }
+    void OnFlowEnded(std::string_view obj, StepAction terminal_action,
+                     int reached_ordinal, const std::vector<TraceEntry>&,
+                     Duration wall_clock, Duration total_cpu,
+                     Duration total_async_wait, const FlowStats&) override
+    {
+        std::ostringstream os;
+        os << (terminal_action == StepAction::Done ? "DONE" : "FAILED")
+           << " reached=#" << reached_ordinal
+           << " wall=" << FmtMs(wall_clock)
+           << " cpu="  << FmtMs(total_cpu)
+           << " async="<< FmtMs(total_async_wait);
+        Emit(obj, "FLOW END", os.str());
+    }
+
+private:
+    static std::string FmtMs(Duration d)
+    {
+        std::ostringstream os;
+        os.setf(std::ios::fixed);
+        os.precision(2);
+        os << to_ms(d) << "ms";
+        return os.str();
+    }
+
+    void Emit(std::string_view obj, const char* tag, const std::string& msg)
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        std::ostringstream os;
+        os << "[" << obj << "] " << tag;
+        if (!msg.empty())
+            os << " " << msg;
+        std::string line = os.str();
+
+        std::cout << line << "\n";
+        std::cout.flush();
+
+        // Open / append / close on every line. Survives a crash.
+        std::ofstream fout(path_, std::ios::app);
+        if (fout)
+            fout << line << "\n";
+    }
+
+    std::mutex  mu_;
+    std::string path_;
+};
+
+// ======================================================================
+//  Line lifecycle
+// ======================================================================
 static void StartLine()
 {
-    Stage::inst().Start(&Stage::OnRun_Begin);
-    Loader::inst().Start(&Loader::OnRun_Begin);
-    Viz::inst().Start(&Viz::OnRun_Begin);
-    Picker::GetInst("AB").Start(&Picker::OnRun_Begin, Picker::Role::LoadToStage);
-    Picker::GetInst("BC").Start(&Picker::OnRun_Begin, Picker::Role::StageToUnload);
+    Stage::inst();           // lazy create
+    Viz::inst();
+    Orchestrator::inst();
+
+    Viz::inst().StartFlow(&Viz::OnViz_Begin);
+    Orchestrator::inst().StartFlow(&Orchestrator::OnSchedule_Begin);
 }
 
-// Tell every module to wind down, then wait for the pump to go quiet.
 static void StopLine()
 {
-    g_stop.store(true);
-    Picker::GetInst("AB").Wait();
-    Picker::GetInst("BC").Wait();
-    Stage::inst().Wait();
-    Loader::inst().Wait();
-    Viz::inst().Wait();
+    LineState::RequestStop();
+    Orchestrator::inst().WaitUntilIdle();
+    LoadPicker::GetInst().WaitUntilIdle();
+    UnloadPicker::GetInst().WaitUntilIdle();
+    Stage::inst().WaitUntilIdle();
+    Viz::inst().WaitUntilIdle();
 }
 
-// ════════════════════════════════════════════════════════════════════════════
+// ======================================================================
 //  Visualisation
-// ════════════════════════════════════════════════════════════════════════════
+// ======================================================================
 #if UNIFLOW_WIN32_VIZ
 
-static int SX(double x) { return 60 + static_cast<int>(x / kXMax * 860.0); }
-static int SZ(double z) { return 96 + static_cast<int>(z / kZDown * 210.0); }
+static int SX(double x) { return 60 + static_cast<int>(x / LineGeometry::kXMax_mm * 860.0); }
+static int SZ(double z) { return 96 + static_cast<int>(z / LineGeometry::kZDown_mm * 210.0); }
 
 static void DrawScene(HDC hdc, const RECT& rc)
 {
-    // Double-buffer into a memory DC to avoid flicker.
     HDC     mem = CreateCompatibleDC(hdc);
     HBITMAP bmp = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
     HBITMAP old = static_cast<HBITMAP>(SelectObject(mem, bmp));
@@ -469,8 +1062,6 @@ static void DrawScene(HDC hdc, const RECT& rc)
 
     Snapshot s = ReadSnapshot();
 
-    // Rails the two pickers ride on (AB slightly above BC so they never
-    // visually overlap — the "살짝 비켜있어야" offset).
     HPEN rail = CreatePen(PS_SOLID, 3, RGB(70, 74, 84));
     HPEN oldp = static_cast<HPEN>(SelectObject(mem, rail));
     MoveToEx(mem, 50, 70, nullptr); LineTo(mem, 930, 70);
@@ -478,7 +1069,6 @@ static void DrawScene(HDC hdc, const RECT& rc)
     SelectObject(mem, oldp);
     DeleteObject(rail);
 
-    // Zone floors.
     auto zone = [&](double zx, const char* label, COLORREF c)
     {
         RECT   z{SX(zx) - 56, 330, SX(zx) + 56, 372};
@@ -487,43 +1077,41 @@ static void DrawScene(HDC hdc, const RECT& rc)
         DeleteObject(b);
         TextOutA(mem, SX(zx) - 50, 376, label, lstrlenA(label));
     };
-    zone(kZoneA, "A  Load", RGB(40, 60, 90));
-    zone(kZoneB, "B  Stage", RGB(70, 55, 90));
-    zone(kZoneC, "C  Unload", RGB(40, 80, 60));
+    zone(LineGeometry::kZoneA_mm, "A  Load",   RGB(40, 60, 90));
+    zone(LineGeometry::kZoneB_mm, "B  Stage",  RGB(70, 55, 90));
+    zone(LineGeometry::kZoneC_mm, "C  Unload", RGB(40, 80, 60));
 
-    // B-zone safety span — the region only one picker may occupy.
     HPEN span = CreatePen(PS_DOT, 1, RGB(120, 90, 130));
     oldp      = static_cast<HPEN>(SelectObject(mem, span));
-    MoveToEx(mem, SX(kZoneB - kBClear), 60, nullptr);
-    LineTo(mem, SX(kZoneB - kBClear), 330);
-    MoveToEx(mem, SX(kZoneB + kBClear), 60, nullptr);
-    LineTo(mem, SX(kZoneB + kBClear), 330);
+    MoveToEx(mem, SX(LineGeometry::kZoneB_mm - LineGeometry::kBSafetyGap_mm), 60, nullptr);
+    LineTo  (mem, SX(LineGeometry::kZoneB_mm - LineGeometry::kBSafetyGap_mm), 330);
+    MoveToEx(mem, SX(LineGeometry::kZoneB_mm + LineGeometry::kBSafetyGap_mm), 60, nullptr);
+    LineTo  (mem, SX(LineGeometry::kZoneB_mm + LineGeometry::kBSafetyGap_mm), 330);
     SelectObject(mem, oldp);
     DeleteObject(span);
 
-    // The Stage table at B (shifts with its x/y while machining).
     {
-        int    sx = SX(s.stage_x);
-        int    sy = 318 + static_cast<int>(s.stage_y / 40.0 * 8.0);
+        int    sx = SX(s.stage_table_x_mm);
+        int    sy = 318 + static_cast<int>(s.stage_table_y_mm / 40.0 * 8.0);
         RECT   t{sx - 34, sy - 12, sx + 34, sy + 12};
-        COLORREF c = s.stage_state == 2 ? RGB(200, 120, 60)
-                     : s.stage_state == 3 ? RGB(90, 170, 110)
-                                          : RGB(90, 94, 104);
+        COLORREF c =
+            s.stage_state == StageState::Processing         ? RGB(200, 120, 60) :
+            s.stage_state == StageState::ProcessedPartReady ? RGB(90, 170, 110) :
+            s.stage_state == StageState::RawPartLoaded      ? RGB(180, 160, 60) :
+                                                              RGB(90, 94, 104);
         HBRUSH b = CreateSolidBrush(c);
         FillRect(mem, &t, b);
         DeleteObject(b);
     }
 
-    // A raw part waiting at Load.
-    if (s.zoneA_part)
+    if (s.zoneA_has_part)
     {
-        RECT   p{SX(kZoneA) - 11, 308, SX(kZoneA) + 11, 330};
+        RECT   p{SX(LineGeometry::kZoneA_mm) - 11, 308, SX(LineGeometry::kZoneA_mm) + 11, 330};
         HBRUSH b = CreateSolidBrush(RGB(210, 180, 70));
         FillRect(mem, &p, b);
         DeleteObject(b);
     }
 
-    // Draw one picker: a head on its arm, a part square when carrying.
     auto picker = [&](double px, double pz, bool carry, int rail_y,
                       COLORREF c, const char* tag, const std::string& phase)
     {
@@ -531,7 +1119,7 @@ static void DrawScene(HDC hdc, const RECT& rc)
         HPEN arm = CreatePen(PS_SOLID, 5, c);
         oldp     = static_cast<HPEN>(SelectObject(mem, arm));
         MoveToEx(mem, hx, rail_y, nullptr);
-        LineTo(mem, hx, hy);
+        LineTo  (mem, hx, hy);
         SelectObject(mem, oldp);
         DeleteObject(arm);
 
@@ -551,15 +1139,19 @@ static void DrawScene(HDC hdc, const RECT& rc)
         TextOutA(mem, hx - 34, rail_y - 18, label.c_str(),
                  static_cast<int>(label.size()));
     };
-    picker(s.ab_x, s.ab_z, s.ab_carry, 70, RGB(90, 150, 230), "AB", s.ab_phase);
-    picker(s.bc_x, s.bc_z, s.bc_carry, 86, RGB(230, 130, 90), "BC", s.bc_phase);
+    picker(s.load_x_mm,   s.load_z_mm,   s.load_carry,   70,
+           RGB(90, 150, 230), "LD", s.load_phase);
+    picker(s.unload_x_mm, s.unload_z_mm, s.unload_carry, 86,
+           RGB(230, 130, 90), "UL", s.unload_phase);
 
-    // Header / counter.
-    const char* hdr = "uniflow CNC line  -  one Picker class, two instances, "
-                      "lock-free B-zone hand-off";
+    const char* hdr = "uniflow CNC line - LoadPicker / Stage / UnloadPicker, "
+                      "orchestrator-driven, lock-free B-zone hand-off";
     TextOutA(mem, 50, 16, hdr, lstrlenA(hdr));
     std::string done = "delivered at C: " + std::to_string(s.delivered);
     TextOutA(mem, 760, 16, done.c_str(), static_cast<int>(done.size()));
+    std::string stg = std::string("stage: ") + ToString(s.stage_state)
+                      + " (" + s.stage_phase + ")";
+    TextOutA(mem, 50, 36, stg.c_str(), static_cast<int>(stg.size()));
 
     BitBlt(hdc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
     SelectObject(mem, old);
@@ -619,26 +1211,26 @@ static void RunVisualisation()
     }
 }
 
-#else // ── non-Windows: console animation ──────────────────────────────────
+#else // ---------- non-Windows: console animation -----------------------
 
 static void RunVisualisation()
 {
-    auto cell = [](double x) { return static_cast<int>(x / kXMax * 64.0); };
+    auto cell = [](double x) { return static_cast<int>(x / LineGeometry::kXMax_mm * 64.0); };
     const auto t0 = std::chrono::steady_clock::now();
     std::cout << "uniflow CNC line (console). Runs ~20s.\n";
     while (std::chrono::steady_clock::now() - t0 < 20s)
     {
         Snapshot s = ReadSnapshot();
         std::string track(66, ' ');
-        track[cell(kZoneA)] = 'A';
-        track[cell(kZoneB)] = 'B';
-        track[cell(kZoneC)] = 'C';
-        std::string ab(66, ' '), bc(66, ' ');
-        ab[cell(s.ab_x)] = s.ab_carry ? '#' : 'v';
-        bc[cell(s.bc_x)] = s.bc_carry ? '#' : 'v';
-        std::cout << "\r AB[" << ab << "] " << s.ab_phase << "        \n"
-                  << " BC[" << bc << "] " << s.bc_phase << "        \n"
-                  << "   [" << track << "]  stage=" << s.stage_state
+        track[cell(LineGeometry::kZoneA_mm)] = 'A';
+        track[cell(LineGeometry::kZoneB_mm)] = 'B';
+        track[cell(LineGeometry::kZoneC_mm)] = 'C';
+        std::string ld(66, ' '), ul(66, ' ');
+        ld[cell(s.load_x_mm)]   = s.load_carry   ? '#' : 'v';
+        ul[cell(s.unload_x_mm)] = s.unload_carry ? '#' : 'v';
+        std::cout << "\r LD[" << ld << "] " << s.load_phase << "        \n"
+                  << " UL[" << ul << "] " << s.unload_phase << "        \n"
+                  << "   [" << track << "]  stage=" << ToString(s.stage_state)
                   << " delivered=" << s.delivered << "   \x1b[3A" << std::flush;
         std::this_thread::sleep_for(80ms);
     }
@@ -647,20 +1239,26 @@ static void RunVisualisation()
 
 #endif
 
-// ════════════════════════════════════════════════════════════════════════════
+// ======================================================================
 int main()
 {
-    // The window/console IS the output — keep the per-step console log quiet.
-    uniflow::SetObserver(std::make_unique<uniflow::IUniflowObserver>());
+    // BS thread pool for the HW handshake simulations (SendStart / Cleanup).
+    uniflow::RegisterExecutor(
+        "default", std::make_shared<uniflow::BSThreadPoolExecutor>(2));
 
-    // Two instances of ONE Picker class — named, because there are two.
-    Picker ab{"AB"};
-    Picker bc{"BC"};
+    // Console + file logging. The file is opened/closed on every line.
+    uniflow::SetObserver(std::make_unique<LineLogObserver>("cnc_pickers.log"));
+
+    // The two pickers are non-singleton modules - construct them here so
+    // their names land in the registry before any flow looks them up.
+    LoadPicker   load;
+    UnloadPicker unload;
 
     StartLine();
-    RunVisualisation(); // blocks until the window closes (or the console timer)
+    RunVisualisation();
     StopLine();
 
-    std::cout << "parts delivered to Unload: " << g_delivered << "\n";
+    std::cout << "parts delivered to Unload: "
+              << LineState::DeliveredCount() << "\n";
     return 0;
 }
