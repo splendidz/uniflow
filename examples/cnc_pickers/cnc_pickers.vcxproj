@@ -20,9 +20,27 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="globals.cpp" />
+    <ClCompile Include="snapshot.cpp" />
+    <ClCompile Include="picker_motion.cpp" />
+    <ClCompile Include="stage.cpp" />
+    <ClCompile Include="load_picker.cpp" />
+    <ClCompile Include="unload_picker.cpp" />
+    <ClCompile Include="orchestrator.cpp" />
+    <ClCompile Include="env_log_observer.cpp" />
+    <ClCompile Include="viz.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="uniflow.hpp" />
+    <ClInclude Include="globals.h" />
+    <ClInclude Include="snapshot.h" />
+    <ClInclude Include="picker_motion.h" />
+    <ClInclude Include="stage.h" />
+    <ClInclude Include="load_picker.h" />
+    <ClInclude Include="unload_picker.h" />
+    <ClInclude Include="orchestrator.h" />
+    <ClInclude Include="env_log_observer.h" />
+    <ClInclude Include="viz.h" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>

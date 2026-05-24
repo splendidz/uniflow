@@ -274,130 +274,202 @@ struct FlowStats
 // Every log line / metric the framework produces is funnelled through one of
 // these hooks - the framework itself never touches std::cout. Subclass and
 // install with uniflow::SetObserver; override only the events you care about.
+// Origin record: where in the source did StartFlow get called?
+// Captured by the UF_START_FLOW macro (__FILE__ / __LINE__) and threaded
+// through OnFlowStarted / OnFlowEnded so logs can answer "who started this
+// flow?" - critical when a stray flow appears unexpectedly.
+struct FlowOrigin
+{
+    const char* file = nullptr; // nullptr when StartFlow was called raw
+    int         line = 0;
+};
+
 class IUniflowObserver
 {
 public:
     virtual ~IUniflowObserver() = default;
 
     // Fired once when StartFlow() arms a fresh flow on `obj`. Called on the
-    // pump thread driving that module, before any step runs. Use it to open
-    // per-flow log scopes or reset per-flow counters.
-    virtual void OnFlowStarted(std::string_view /*obj*/) {}
+    // pump thread driving that module, before any step runs. `origin` is the
+    // source location of the UF_START_FLOW caller (file/line = {nullptr,0}
+    // if StartFlow was called without the macro).
+    virtual void OnFlowStarted(std::string_view /*obj*/,
+                               FlowOrigin       /*origin*/) {}
 
-    // Fired immediately after every step function returns. `step` is the step
-    // name (UF_NEXT-captured), `ordinal` is the 1-based step index within the
-    // current flow, `cpu` is the wall time the step held the pump thread.
-    // Use for per-step tracing and for hot-path profiling.
+    // Fired immediately after every step body returns. Receive both axes
+    // of progress:
+    //   `step_ordinal` = how many DISTINCT steps have executed in this flow
+    //                    (only advances when a step returns Advance);
+    //   `tick`         = how many times the pump called THIS step body
+    //                    (includes Stay/Wait re-entries).
+    // `description` is whatever the step set with Describe(...) - empty if
+    // the step did not call Describe. `elapsed_cpu` is the wall time this
+    // single invocation held the pump thread (NOT the cumulative step time).
     virtual void OnStepRan(std::string_view /*obj*/, std::string_view /*step*/,
-                           int /*ordinal*/, Duration /*cpu*/) {}
+                           std::string_view /*description*/,
+                           int /*step_ordinal*/, int /*tick*/,
+                           Duration /*elapsed_cpu*/) {}
 
-    // Fired right after UF_ASYNC successfully enqueues `job` to a pool. `step`
-    // is the step that submitted it. Use to correlate "what kicked off this
-    // worker" in logs; no result is available yet.
+    // Fired when a step body throws. `what` is the exception's what() (or
+    // "unknown" for non-std exceptions). The flow is forcibly Failed right
+    // after this hook returns; the exception does NOT propagate out of the
+    // pump thread.
+    virtual void OnStepThrew(std::string_view /*obj*/, std::string_view /*step*/,
+                             std::string_view /*what*/,
+                             int /*step_ordinal*/, int /*tick*/) {}
+
+    // Fired right after UF_ASYNC successfully enqueues `job` to a pool.
     virtual void OnAsyncSubmitted(std::string_view /*obj*/, std::string_view /*step*/,
                                   std::string_view /*job*/) {}
 
     // Fired once per async job, after the worker either returned a value,
-    // threw, or missed its deadline. `wait` is the elapsed pool wait (submit
-    // to completion). `had_error` is set if the worker threw; `timed_out` is
-    // set if AsyncOpts::timeout was exceeded.
+    // threw, or missed its deadline.
     virtual void OnAsyncCompleted(std::string_view /*obj*/, std::string_view /*job*/,
                                   Duration /*wait*/, bool /*had_error*/,
                                   bool /*timed_out*/) {}
 
-    // Fired when a single step held the pump thread longer than
-    // Config::slow_cpu_threshold. This is the single-thread-protection alarm:
-    // any step that trips it is starving every other module on this runtime.
+    // Single-thread-protection alarm: a step held the pump thread longer
+    // than Config::slow_cpu_threshold this invocation.
     virtual void OnSlowCpuStep(std::string_view /*obj*/, std::string_view /*step*/,
                                Duration /*cpu*/) {}
 
     // Fired at most once per async job, when its in-flight time crosses
-    // AsyncOpts::slow_warn_after. The job is still pending; this is an early
-    // signal, not a failure. Re-armed only on the next submission.
+    // AsyncOpts::slow_warn_after.
     virtual void OnSlowAsync(std::string_view /*obj*/, std::string_view /*job*/,
                              Duration /*wait_so_far*/) {}
 
     // Fired once when a flow leaves the running state via Done or Fail.
-    // `terminal_action` distinguishes the two; `reached_ordinal` is the last
-    // step index seen; `trace` is the ordered list of every step transition
-    // and async completion. `wall_clock` = total flow duration; `total_cpu` =
-    // summed pump-thread time across all its steps; `total_async_wait` =
-    // summed time the flow spent gated on async jobs. `stats` is the running
-    // per-module record (success/fail counts, max flow length ever seen).
+    //   `terminal_action`     - Done or Fail
+    //   `final_step_ordinal`  - logical step count reached (Advance-only)
+    //   `total_ticks`         - total step body invocations (incl. re-entries)
+    //   `trace`               - ordered StepTransition + AsyncCompletion log
+    //   `wall_clock`          - flow start -> end wall time (== "total time
+    //                           the flow lived", e.g. for a 5 s machining
+    //                           cycle this is ~5 s)
+    //   `total_cpu`           - summed pump-thread time across every step
+    //                           body invocation (orders of magnitude smaller
+    //                           than wall_clock for a paced flow)
+    //   `total_async_wait`    - summed time the flow spent gated on async
+    //   `origin`              - UF_START_FLOW source location
     virtual void OnFlowEnded(std::string_view /*obj*/, StepAction /*terminal_action*/,
-                             int /*reached_ordinal*/,
+                             int /*final_step_ordinal*/, int /*total_ticks*/,
                              const std::vector<TraceEntry>& /*trace*/,
                              Duration /*wall_clock*/, Duration /*total_cpu*/,
                              Duration /*total_async_wait*/,
-                             const FlowStats& /*stats*/) {}
+                             const FlowStats& /*stats*/,
+                             FlowOrigin       /*origin*/) {}
 };
 
-// Default observer - pretty-prints to stdout. Thread-safe: every runtime's
-// pump thread may call into it.
+// Default observer - pretty-prints to stdout in fixed-width columns so the
+// log is easy to scan side-by-side on a wide monitor. Thread-safe: every
+// runtime's pump thread may call into it.
+//
+// Column layout (STEP rows):
+//   [ obj          ] step                       description                     #s/#t elapsed
+//   [ Stage        ] OnProcess_WaitHwReady      hw ready handshake settling     #04/#23 elapsed=0.02ms
 class ConsoleObserver : public IUniflowObserver
 {
 public:
-    void OnFlowStarted(std::string_view obj) override
+    // Fixed widths: tune once here, every line follows.
+    static constexpr int kColObj  = 14;
+    static constexpr int kColStep = 28;
+    static constexpr int kColDesc = 36;
+
+    void OnFlowStarted(std::string_view obj, FlowOrigin origin) override
     {
         std::lock_guard<std::mutex> lk(mu_);
-        std::cout << "[" << obj << "] flow ENTER\n";
+        std::cout << "[" << pad(obj, kColObj) << "] FLOW START";
+        if (origin.file)
+            std::cout << "  caller=" << origin.file << ":" << origin.line;
+        std::cout << "\n";
     }
     void OnStepRan(std::string_view obj, std::string_view step,
-                   int ordinal, Duration cpu) override
+                   std::string_view description,
+                   int step_ordinal, int tick,
+                   Duration elapsed_cpu) override
     {
         std::lock_guard<std::mutex> lk(mu_);
-        std::cout << "[" << obj << "]   #" << pad2(ordinal) << " " << step
-                  << "  cpu=" << fmt_ms(cpu) << "\n";
+        std::cout << "[" << pad(obj, kColObj) << "] "
+                  << pad(step, kColStep) << " "
+                  << pad(description, kColDesc) << " "
+                  << "#" << pad2(step_ordinal) << "/#" << pad2(tick)
+                  << " elapsed=" << fmt_ms(elapsed_cpu) << "\n";
+    }
+    void OnStepThrew(std::string_view obj, std::string_view step,
+                     std::string_view what,
+                     int step_ordinal, int tick) override
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        std::cout << "[" << pad(obj, kColObj) << "] "
+                  << pad(step, kColStep) << " "
+                  << "[THREW] " << what
+                  << " #" << pad2(step_ordinal) << "/#" << pad2(tick) << "\n";
     }
     void OnAsyncSubmitted(std::string_view obj, std::string_view step,
                           std::string_view job) override
     {
         std::lock_guard<std::mutex> lk(mu_);
-        std::cout << "[" << obj << "]        +- submit async " << job
-                  << " (from " << step << ")\n";
+        std::cout << "[" << pad(obj, kColObj) << "] "
+                  << pad(step, kColStep) << " "
+                  << "ASYNC SUBMIT  " << job << "\n";
     }
     void OnAsyncCompleted(std::string_view obj, std::string_view job,
                           Duration wait, bool had_error, bool timed_out) override
     {
         std::lock_guard<std::mutex> lk(mu_);
-        std::cout << "[" << obj << "]        +- async " << job
-                  << " wait=" << fmt_ms(wait);
+        std::cout << "[" << pad(obj, kColObj) << "] "
+                  << pad("", kColStep) << " "
+                  << "ASYNC DONE    " << job
+                  << "  wait=" << fmt_ms(wait);
         if (timed_out)      std::cout << "  [TIMEOUT]";
         else if (had_error) std::cout << "  [ERROR]";
-        else                std::cout << "  [ok]";
         std::cout << "\n";
     }
     void OnSlowCpuStep(std::string_view obj, std::string_view step,
                        Duration cpu) override
     {
         std::lock_guard<std::mutex> lk(mu_);
-        std::cout << "[" << obj << "]   [WARN] SLOW CPU step " << step
-                  << " took " << fmt_ms(cpu) << " on the pump thread\n";
+        std::cout << "[" << pad(obj, kColObj) << "] "
+                  << pad(step, kColStep) << " "
+                  << "[SLOW CPU]  step held pump for " << fmt_ms(cpu) << "\n";
     }
     void OnSlowAsync(std::string_view obj, std::string_view job,
                      Duration wait_so_far) override
     {
         std::lock_guard<std::mutex> lk(mu_);
-        std::cout << "[" << obj << "]   [WARN] SLOW ASYNC " << job
-                  << " still pending after " << fmt_ms(wait_so_far) << "\n";
+        std::cout << "[" << pad(obj, kColObj) << "] "
+                  << pad("", kColStep) << " "
+                  << "[SLOW ASYNC]  " << job
+                  << "  pending=" << fmt_ms(wait_so_far) << "\n";
     }
     void OnFlowEnded(std::string_view obj, StepAction terminal_action,
-                     int reached_ordinal, const std::vector<TraceEntry>& /*trace*/,
+                     int final_step_ordinal, int total_ticks,
+                     const std::vector<TraceEntry>& /*trace*/,
                      Duration wall_clock, Duration total_cpu,
-                     Duration total_async_wait, const FlowStats& stats) override
+                     Duration total_async_wait, const FlowStats& /*stats*/,
+                     FlowOrigin origin) override
     {
         std::lock_guard<std::mutex> lk(mu_);
-        std::cout << "[" << obj << "] flow "
-                  << (terminal_action == StepAction::Done ? "DONE" : "FAILED")
-                  << "  reached #" << pad2(reached_ordinal);
-        if (stats.max_seen_length)
-            std::cout << "/#" << pad2(stats.max_seen_length);
-        std::cout << "  wall=" << fmt_ms(wall_clock)
+        std::cout << "[" << pad(obj, kColObj) << "] FLOW "
+                  << (terminal_action == StepAction::Done ? "END  DONE  " : "END  FAIL  ")
+                  << "steps=#" << pad2(final_step_ordinal)
+                  << " ticks=#" << pad2(total_ticks)
+                  << "  wall=" << fmt_ms(wall_clock)
                   << "  cpu=" << fmt_ms(total_cpu)
-                  << "  async=" << fmt_ms(total_async_wait) << "\n";
+                  << "  async=" << fmt_ms(total_async_wait);
+        if (origin.file)
+            std::cout << "  caller=" << origin.file << ":" << origin.line;
+        std::cout << "\n";
     }
 
 private:
+    static std::string pad(std::string_view sv, int width)
+    {
+        std::string s(sv);
+        if (static_cast<int>(s.size()) < width)
+            s.append(width - s.size(), ' ');
+        return s;
+    }
     static std::string pad2(int v)
     {
         std::ostringstream os;
@@ -755,12 +827,66 @@ inline void NotifyAll()
 }
 
 // ----------------------------------------------------------------------
+//  Tutorial: two ways to wait inside a step
+//
+//  Most "the step is waiting for X" patterns fall into one of two shapes.
+//  uniflow gives both a first-class form so you do not have to invent your
+//  own state-tracking; pick whichever matches the underlying work.
+//
+//  --- (1) Async pool: offload blocking work, get woken on completion ---
+//
+//      StepResult OnQuery_Begin() {
+//          UF_ASYNC(DoBlockingLookup, key_);    // hands `DoBlockingLookup`
+//          return UF_NEXT(OnQuery_HaveResult);  // to the BS thread pool
+//      }
+//      StepResult OnQuery_HaveResult() {
+//          auto r = AsyncResult<Record>();
+//          if (r.failed())     return Fail();
+//          if (r.is_timeout()) return Fail();
+//          record_ = std::move(r.value());
+//          return UF_NEXT(OnQuery_Done);
+//      }
+//      static Record DoBlockingLookup(std::string key) { ... }  // runs on pool
+//
+//    Use when the work is genuinely blocking (network I/O, file read,
+//    long compute). The pump thread never blocks; the moment the worker
+//    returns, the pool worker wakes the pump and the continuation step
+//    runs immediately - response latency floor is the cv-wake (~us), not
+//    the polling interval.
+//
+//  --- (2) UFTimer poll: wait for a condition (flag, status, time) ---
+//
+//      return UF_NEXT(OnInit_WaitReady, UFTimer{});
+//
+//      StepResult OnInit_WaitReady(UFTimer& t) {
+//          if (t.TimedOut(1000ms))    return Fail();
+//          if (!Hw::ReadySignal())    return Wait();   // re-enter shortly
+//          return UF_NEXT(OnInit_Run);
+//      }
+//
+//    Use when the work is OFF in the world somewhere (a HW flag flipping,
+//    a peer module's state changing) and there is no "completion callback"
+//    you own. The step re-enters on its polling cadence (Config::default_
+//    step_poll, or whatever Wait(d) you pass). If the producer of the
+//    condition calls uniflow::NotifyAll() when it flips the flag, the pump
+//    wakes immediately and the step re-evaluates on the very next round.
+//
+//  Quick chooser:
+//                            Async pool          UFTimer poll
+//    Work runs              another thread       producer side (or none)
+//    Pump wake on event     yes, automatic       only if producer Notifies
+//    Best for               blocking I/O, CPU    HW flags, peer state
+//    Wrong fit              fast/in-process      large blocking calls
+//                           transformations      (would tie up the pump)
+// ----------------------------------------------------------------------
+
+// ----------------------------------------------------------------------
 //  UFTimer - "wait for a condition with a deadline" helper for steps.
 //
 //  Two ways to use it. Idiomatic (procedural, no switch):
 //
 //      StepResult OnInit_WaitHwReady(UFTimer t) {
-//          if (LineState::Stop())      return Done();
+//          if (GlobalEnv::Stop())      return Done();
 //          if (t.TimedOut(1000ms))     return Fail();
 //          if (!Hw::ReadySignal())     return Wait();
 //          return UF_NEXT(OnInit_NextStep);
@@ -801,14 +927,30 @@ public:
     // Shorthand for the if-pattern: "has the deadline passed yet?"
     bool TimedOut(Duration deadline) const { return Elapsed() >= deadline; }
 
-    // Compact one-shot: evaluate `condition` once and classify.
-    //   true            -> Done
-    //   timeout reached -> Timeout
-    //   else            -> Waiting
-    template <class Predicate>
+    // Compact one-shot: classify the wait state.
+    //   true / predicate returns true -> Done
+    //   timeout reached                -> Timeout
+    //   else                            -> Waiting
+    //
+    // The first overload takes any callable (lambda, free function ptr,
+    // etc.) and only invokes it when checking - useful if the condition
+    // is expensive or has side effects.
+    //
+    // The second overload takes an already-evaluated bool - useful when
+    // the condition is just a flag set by another thread (HW IRQ,
+    // background worker) and you would have called the function once
+    // before passing it in anyway.
+    template <class Predicate,
+              std::enable_if_t<std::is_invocable_r_v<bool, Predicate>, int> = 0>
     Result OnWait(Predicate condition, Duration timeout) const
     {
         if (condition()) return Done;
+        if (TimedOut(timeout)) return Timeout;
+        return Waiting;
+    }
+    Result OnWait(bool condition, Duration timeout) const
+    {
+        if (condition) return Done;
         if (TimedOut(timeout)) return Timeout;
         return Waiting;
     }
@@ -917,14 +1059,28 @@ public:
 
     // -- Public control surface --
 
-    // StartFlow a flow at entry step `fn`, forwarding `args` to it. Any step
+    // Start a flow at entry step `fn`, forwarding `args` to it. Any step
     // (entry or steady) may take parameters: UF_NEXT(fn, args...) captures
     // them into the next step fn the same way StartFlow does for the entry.
     // Returns false if a flow is already running. Thread-safe - serialised
     // with the pump by the per-module mutex; writes the caller makes before
     // StartFlow() are visible to the flow.
+    //
+    // Two entry points:
+    //   StartFlow(fn, args...)                 - raw, origin = {nullptr, 0}
+    //   StartFlowAt(file, line, fn, args...)   - records source location;
+    //                                            normally invoked through
+    //                                            the UF_START_FLOW(mod, fn,
+    //                                            args...) macro which fills
+    //                                            in __FILE__ / __LINE__.
     template <class... Params, class... Args>
     bool StartFlow(StepResult (Derived::*fn)(Params...), Args&&... args)
+    {
+        return StartFlowAt(nullptr, 0, fn, std::forward<Args>(args)...);
+    }
+    template <class... Params, class... Args>
+    bool StartFlowAt(const char* origin_file, int origin_line,
+                     StepResult (Derived::*fn)(Params...), Args&&... args)
     {
         std::lock_guard<std::mutex> lk(op_mu_);
         if (flow_running_)
@@ -946,7 +1102,9 @@ public:
 
         flow_running_         = true;
         curr_step_name_       = "(entry)";
-        curr_ordinal_         = 0;
+        curr_step_description_.clear();
+        step_ordinal_         = 0;
+        tick_count_           = 0;
         flow_started_at_      = Clock::now();
         total_cpu_            = {};
         total_async_          = {};
@@ -955,6 +1113,7 @@ public:
         wake_pending_         = false;
         trace_.clear();
         flow_started_pending_ = true;
+        flow_origin_          = FlowOrigin{origin_file, origin_line};
 
         // Wake the pump in case it was idle-waiting. Without this, the new
         // flow would not start running until the pump's next idle_sleep tick.
@@ -976,6 +1135,13 @@ public:
 
     const std::string& InstanceName() const { return instance_name_; }
     int                RuntimeIndex() const { return runtime_index_; }
+
+    // Read the current step's description (last value set by Describe(...)
+    // in the running step). Safe between modules on the SAME runtime - the
+    // same pump thread that mutates it is the only thread that reads it.
+    // Used by visualisation modules to surface human-readable per-module
+    // status without a dedicated phase_ string in every module class.
+    const std::string& CurrentStepDescription() const { return curr_step_description_; }
 
     // -- Cross-module access --
     // Fetch another module of this type by name (or the anonymous one). Safe
@@ -1017,6 +1183,51 @@ protected:
     static StepResult Wait()
     {
         return Wait(detail::Hub::get().config().default_step_poll);
+    }
+
+    // Per-module exception policy. Override in Derived to control what
+    // happens when a step body throws:
+    //
+    //   return false  (default)  - the pump LOGS the throw through
+    //                              OnStepThrew, then RETHROWS. The
+    //                              exception leaves the pump thread and,
+    //                              with no enclosing handler, the C++
+    //                              runtime calls std::terminate. Strong
+    //                              fail-fast: a thrown step is a bug,
+    //                              crash loudly with a stack trace.
+    //
+    //   return true              - the pump LOGS the throw, then ends
+    //                              the flow as Fail and keeps running.
+    //                              The pump survives, other modules are
+    //                              unaffected, and the next StartFlow on
+    //                              this module starts a clean flow. Pick
+    //                              this for modules where a thrown step
+    //                              is recoverable (e.g. a network module
+    //                              that should reconnect rather than take
+    //                              the whole process down).
+    //
+    // This is a CRTP hook (not virtual): a static call into Derived. Zero
+    // runtime overhead when not overridden; the optimiser folds the
+    // default `return false` straight into the branch.
+    bool CatchStepExceptions() const { return false; }
+
+    // Attach a human-readable description to the current step. Threaded
+    // through to OnStepRan as `description` and into FLOW END logs. Pure
+    // logging metadata - the runtime never inspects it.
+    //
+    // Re-entries (Stay / Wait) keep the previously set description until
+    // the step overrides it; Advance clears it for the next step.
+    //
+    // Variadic ostream-style: every argument is forwarded into a stringstream
+    // with operator<<, so any printable type works.
+    //
+    //   Describe("loading raw part from zone ", zone_letter, " (", x_mm, "mm)");
+    template <class... Args>
+    void Describe(Args&&... args)
+    {
+        std::ostringstream os;
+        (os << ... << std::forward<Args>(args));   // C++17 fold expression
+        curr_step_description_ = os.str();
     }
 
     // Advance to step `Fn` (a member-function pointer baked in at compile
@@ -1080,16 +1291,23 @@ private:
         return r;
     }
 
-    // Reset to idle once a flow reaches Done / Fail.
+    // Reset to idle once a flow reaches Done / Fail. Also wakes the runtime
+    // so any module waiting on this one's idleness (e.g. the orchestrator)
+    // observes the transition immediately, not on the next idle_sleep tick.
     void ClearFlow()
     {
         flow_running_   = false;
-        curr_fn_     = nullptr;
+        curr_fn_        = nullptr;
         curr_step_name_ = nullptr;
-        curr_ordinal_   = 0;
+        curr_step_description_.clear();
+        step_ordinal_   = 0;
+        tick_count_     = 0;
         async_pending_  = false;
         slow_warned_    = false;
         wake_pending_   = false;
+        flow_origin_    = FlowOrigin{};
+        if (runtime_)
+            runtime_->Notify();
     }
 
     std::string             instance_name_;
@@ -1105,13 +1323,16 @@ private:
     // -- Current position within the running flow --
     bool        flow_running_         = false;
     const char* curr_step_name_       = nullptr; // step name (for logs)
-    int         curr_ordinal_         = 0;       // steps run so far this flow
+    std::string curr_step_description_;          // Describe() value, persists across Stay/Wait
+    int         step_ordinal_         = 0;       // unique steps run so far (Advance-only)
+    int         tick_count_           = 0;       // step body invocations (incl. re-entries)
     TimePoint   flow_started_at_      = {};
     Duration    total_cpu_            = {};      // summed pump-thread step time
     Duration    total_async_          = {};      // summed pool wait time
     bool        flow_started_pending_ = false;   // defer OnFlowStarted one tick
     bool        wake_pending_         = false;   // a Wait() delay is in effect
     TimePoint   wake_at_              = {};      // when the Wait()'d step re-runs
+    FlowOrigin  flow_origin_          = {};      // UF_START_FLOW caller location
 
     // The current step, held as a callable std::function. The entry step (set by StartFlow)
     // and every subsequent step (set by Advance from UF_NEXT) live in this
@@ -1155,7 +1376,7 @@ bool Uniflow<Derived>::ExecuteOnce(IUniflowObserver& obs, bool force_wake)
     // with the step events the pump thread produces.
     if (flow_started_pending_)
     {
-        obs.OnFlowStarted(instance_name_);
+        obs.OnFlowStarted(instance_name_, flow_origin_);
         flow_started_pending_ = false;
     }
     if (!flow_running_)
@@ -1219,7 +1440,7 @@ bool Uniflow<Derived>::ExecuteOnce(IUniflowObserver& obs, bool force_wake)
         // CPU time so "pump-thread cost" stays honest.
         TraceEntry te;
         te.kind      = TraceEntry::Kind::AsyncCompletion;
-        te.ordinal   = curr_ordinal_;
+        te.ordinal   = step_ordinal_;
         te.name      = pending_job_label_ ? pending_job_label_ : "";
         te.wait_time = elapsed;
         te.had_error = last_async_exception_ != nullptr;
@@ -1246,42 +1467,92 @@ bool Uniflow<Derived>::ExecuteOnce(IUniflowObserver& obs, bool force_wake)
     // -- 2. Run the step (timed) --
     // Both the entry step (set by StartFlow) and every steady step (set by
     // an Advance from UF_NEXT) live in curr_fn_ - no entry/steady split.
+    //
+    // The step body is always called inside a try/catch so we can LOG the
+    // throw through OnStepThrew with the right step ordinal/tick. After
+    // logging, the per-module CatchStepExceptions() policy decides:
+    //   - false (default) -> rethrow, exception propagates out of the pump
+    //                        thread (std::terminate); fail-fast crash.
+    //   - true            -> swallow, end the flow as Fail, pump survives.
     const char* step_name = curr_step_name_;
+    tick_count_++;                          // increment BEFORE the call so
+                                            // OnStepThrew sees the right tick
     auto        t0        = Clock::now();
-    StepResult  r         = curr_fn_();
-    auto        cpu_dt    = Clock::now() - t0;
+    StepResult  r;
+    std::string throw_what;
+    bool        threw     = false;
+    try
+    {
+        r = curr_fn_();
+    }
+    catch (...)
+    {
+        // Save the original exception so we can rethrow it intact if the
+        // module opts for fail-fast. The intermediate rethrow_exception is
+        // ONLY to extract what() for the log.
+        std::exception_ptr ep = std::current_exception();
+        try { std::rethrow_exception(ep); }
+        catch (const std::exception& e) { throw_what = e.what(); }
+        catch (...)                     { throw_what = "(non-std exception)"; }
+
+        obs.OnStepThrew(instance_name_, step_name ? step_name : "",
+                        throw_what, step_ordinal_, tick_count_);
+
+        if (!static_cast<Derived*>(this)->CatchStepExceptions())
+            std::rethrow_exception(ep);   // fail-fast: pump thread dies here
+
+        threw = true;
+    }
+    auto cpu_dt = Clock::now() - t0;
 
     total_cpu_ += cpu_dt;
-    curr_ordinal_++;
 
+    if (threw)
+    {
+        // Reached here ONLY when CatchStepExceptions() returned true at
+        // the catch site (otherwise we would have rethrown). OnStepThrew
+        // was already emitted there; here we just record the trace entry
+        // and force-Fail the flow so the module ends cleanly.
+        TraceEntry te;
+        te.kind      = TraceEntry::Kind::StepTransition;
+        te.ordinal   = step_ordinal_;
+        te.name      = step_name ? step_name : "";
+        te.cpu_time  = cpu_dt;
+        te.action    = StepAction::Fail;
+        te.had_error = true;
+        trace_.push_back(std::move(te));
+        r = StepResult{StepAction::Fail, {}, nullptr, {}};
+    }
+    else
     {
         TraceEntry te;
         te.kind     = TraceEntry::Kind::StepTransition;
-        te.ordinal  = curr_ordinal_;
+        te.ordinal  = step_ordinal_;
         te.name     = step_name ? step_name : "";
         te.cpu_time = cpu_dt;
         te.action   = r.action;
         trace_.push_back(std::move(te));
+
+        obs.OnStepRan(instance_name_, step_name ? step_name : "",
+                      curr_step_description_,
+                      step_ordinal_, tick_count_, cpu_dt);
+
+        // A step shares the one pump thread with every other module - if
+        // it overran the threshold, raise the single-thread-protection alarm.
+        if (cpu_dt > detail::Hub::get().config().slow_cpu_threshold)
+            obs.OnSlowCpuStep(instance_name_, step_name ? step_name : "", cpu_dt);
+
+        // If this very step called UF_ASYNC, async_pending_ is now set.
+        if (async_pending_)
+            obs.OnAsyncSubmitted(instance_name_, step_name ? step_name : "",
+                                 pending_job_label_ ? pending_job_label_ : "");
     }
-
-    obs.OnStepRan(instance_name_, step_name ? step_name : "",
-                  curr_ordinal_, cpu_dt);
-
-    // A step shares the one pump thread with every other module - if it
-    // overran the threshold, raise the core single-thread-protection alarm.
-    if (cpu_dt > detail::Hub::get().config().slow_cpu_threshold)
-        obs.OnSlowCpuStep(instance_name_, step_name ? step_name : "", cpu_dt);
-
-    // If this very step called UF_ASYNC, async_pending_ is now set.
-    if (async_pending_)
-        obs.OnAsyncSubmitted(instance_name_, step_name ? step_name : "",
-                             pending_job_label_ ? pending_job_label_ : "");
 
     // -- 3. Apply the StepResult --
     switch (r.action)
     {
     case StepAction::Stay:
-        // Cursor unchanged: curr_fn_ re-runs next tick.
+        // Cursor unchanged: curr_fn_ re-runs next tick. Same description.
         break;
     case StepAction::Wait:
         // Cursor unchanged, but hold the re-run until the delay elapses.
@@ -1289,9 +1560,11 @@ bool Uniflow<Derived>::ExecuteOnce(IUniflowObserver& obs, bool force_wake)
         wake_at_      = Clock::now() + r.delay;
         break;
     case StepAction::Advance:
-        // The next step fn has captured its bound arguments (if any) already.
-        curr_fn_     = std::move(r.next_fn);
+        // Entering a NEW step - logical ordinal advances, description resets.
+        curr_fn_        = std::move(r.next_fn);
         curr_step_name_ = r.next_name;
+        curr_step_description_.clear();
+        step_ordinal_++;
         break;
     case StepAction::Done:
     case StepAction::Fail:
@@ -1299,19 +1572,20 @@ bool Uniflow<Derived>::ExecuteOnce(IUniflowObserver& obs, bool force_wake)
         if (r.action == StepAction::Done)
         {
             stats_.success_count++;
-            stats_.last_success_length = curr_ordinal_;
-            if (curr_ordinal_ > stats_.max_seen_length)
-                stats_.max_seen_length = curr_ordinal_;
+            stats_.last_success_length = step_ordinal_;
+            if (step_ordinal_ > stats_.max_seen_length)
+                stats_.max_seen_length = step_ordinal_;
         }
         else
         {
             stats_.fail_count++;
         }
-        obs.OnFlowEnded(instance_name_, r.action, curr_ordinal_, trace_,
+        obs.OnFlowEnded(instance_name_, r.action,
+                        step_ordinal_, tick_count_, trace_,
                         Clock::now() - flow_started_at_, total_cpu_,
-                        total_async_, stats_);
+                        total_async_, stats_, flow_origin_);
         ClearFlow();
-        idle_cv_.notify_all(); // wake any Wait()
+        idle_cv_.notify_all(); // wake any WaitUntilIdle()
         break;
     }
     }
@@ -1443,6 +1717,23 @@ void Uniflow<Derived>::SubmitAsync(const char* job_label, AsyncOpts opts,
 #define UF_ASYNC(fn, ...)                                                     \
     this->template SubmitAsync<&S::fn>(#fn, ::uniflow::AsyncOpts{},           \
                                        ##__VA_ARGS__)
+
+// Launch a flow on `mod` at entry step `fn`, recording the caller's source
+// location so log lines and "who started this flow?" debugging is trivial.
+// `mod` may be any reference to a Uniflow<Derived> instance (Stage::inst(),
+// LoadPicker::GetInst("LoadPicker"), a local module variable, ...). The
+// macro picks the Derived type via decltype, so no manual class name needed.
+//
+// Equivalent to `mod.StartFlow(&Derived::fn, args...)` plus origin capture.
+// Returns the same bool StartFlow returns (false if a flow is already running).
+//
+//   UF_START_FLOW(Stage::inst(), OnProcess_Begin);
+//   UF_START_FLOW(my_router, OnRoute_Begin, message, 42);
+#define UF_START_FLOW(mod, fn, ...)                                           \
+    ((mod).StartFlowAt(                                                       \
+        __FILE__, __LINE__,                                                   \
+        &std::remove_reference_t<decltype(mod)>::fn,                          \
+        ##__VA_ARGS__))
 
 // Same as UF_ASYNC but with an explicit AsyncOpts (timeout / pool / warn).
 #define UF_ASYNC_OPT(fn, opts, ...)                                           \
