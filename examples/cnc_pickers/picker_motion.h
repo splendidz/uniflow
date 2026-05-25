@@ -1,17 +1,6 @@
-// ======================================================================
-//  picker_motion.h - shared motion + gripper state for both pickers.
-//
-//  Not a uniflow base. Composed by inheritance into LoadPicker and
-//  UnloadPicker. Kept off the uniflow CRTP base because that base is
-//  templated on Derived.
-//
-//  Three axes:
-//    x_axis_      - linear travel along the rail (A <-> B <-> C).
-//    z_axis_      - vertical up/down at a pick or place position.
-//    finger_axis_ - separation between the two gripper fingers.
-//                   target 0 = closed (gripping), kFingerOpen_mm = open.
-//                   Initial pose is open: an idle picker is ready to grab.
-// ======================================================================
+// picker_motion.h - x/z/finger axes shared by Load- and UnloadPicker via
+// composition (not via the CRTP uniflow base, which is per-Derived).
+// finger target: 0 = closed, kFingerOpen_mm = open.
 #pragma once
 
 #include "globals.h"

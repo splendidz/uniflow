@@ -1,14 +1,7 @@
-// ======================================================================
-//  unload_picker.h - carries the finished part B -> C.
-//
-//  Same shape as LoadPicker but the SOURCE is the contested B zone, so
-//  the entry-to-B check happens on the way in (not just on the dest dip).
-//
-//  Step bodies are defined in unload_picker.cpp. The cross-picker queries
-//  LoadPicker::PartnerInZoneB / UnloadPicker::PartnerInZoneB are also
-//  defined there: by including load_picker.h first, both classes are
-//  visible by the time the out-of-line definitions need them.
-// ======================================================================
+// unload_picker.h - carries the finished part B -> C. Same shape as
+// LoadPicker but the SOURCE is the contested B zone. PartnerInZoneB
+// for both pickers is defined in unload_picker.cpp where both classes
+// are visible.
 #pragma once
 
 #include "globals.h"
@@ -20,7 +13,9 @@ class UnloadPicker : public uniflow::Uniflow<UnloadPicker>,
     UF_USES_UNIFLOW(UnloadPicker);
 
 public:
-    UnloadPicker();
+    explicit UnloadPicker(uniflow::Runtime& rt)
+        : uniflow::Uniflow<UnloadPicker>(rt),
+          PickerMotion(GlobalGeometry::kZoneC_mm) {}
 
     StepResult OnUnload_Begin();
 

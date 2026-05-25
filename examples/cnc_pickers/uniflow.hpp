@@ -1,41 +1,28 @@
-// ======================================================================
-//  uniflow.hpp - single-threaded, step-driven cooperative async framework
+﻿// uniflow.hpp - single-threaded, step-driven cooperative async framework.
+// Single header, C++17.
 //
-//  A module expresses its logic as a chain of step functions. One pump thread
-//  per runtime drives every module round-robin; blocking work is offloaded to
-//  a thread pool and its result is delivered to the next step. The runtime is
-//  hidden - you never hold it. See DESIGN.md for the rationale.
+// A module is a class deriving from Uniflow<Derived>; its logic is a chain
+// of step functions returning StepResult. One pump thread per Runtime drives
+// every attached module round-robin; blocking work goes to a thread pool
+// via UF_ASYNC. No framework-side global state - the user creates a Runtime
+// and constructs modules with `Runtime&`.
 //
-//  Typical usage:
+//   class OrderRouter : public uniflow::Uniflow<OrderRouter> {
+//       UF_USES_UNIFLOW(OrderRouter);
+//   public:
+//       explicit OrderRouter(uniflow::Runtime& rt)
+//           : uniflow::Uniflow<OrderRouter>(rt) {}
+//       StepResult OnRoute_Begin(Message m) { msg_ = std::move(m);
+//                                             return UF_NEXT(OnRoute_Done); }
+//   private:
+//       StepResult OnRoute_Done() { return Done(); }
+//       Message msg_;
+//   };
 //
-//      class OrderRouter : public uniflow::Uniflow<OrderRouter> {
-//          UF_SINGLETON(OrderRouter);                  // one instance, inst()
-//      public:
-//          StepResult OnRoute_Begin(Message m) {       // entry step: public
-//              msg_ = std::move(m);
-//              return UF_NEXT(OnRoute_Dispatch);
-//          }
-//      private:
-//          StepResult OnRoute_Dispatch() {             // internal step: private
-//              UF_ASYNC(DoLookup, msg_.key);           // static fn, no `this`
-//              return UF_NEXT(OnRoute_LookupDone);
-//          }
-//          StepResult OnRoute_LookupDone() {
-//              auto r = AsyncResult<Record>();
-//              if (r.is_timeout() || r.failed()) return Fail();
-//              return Done();
-//          }
-//          static Record DoLookup(std::string key);    // runs on the pool
-//          Message msg_;
-//      };
-//
-//      int main() {
-//          OrderRouter::inst().StartFlow(&OrderRouter::OnRoute_Begin, Message{...});
-//          OrderRouter::inst().WaitUntilIdle();
-//      }
-//
-//  Single header, C++17.
-// ======================================================================
+//   uniflow::Runtime rt;
+//   OrderRouter      router{rt};
+//   UF_START_FLOW(router, OnRoute_Begin, Message{...});
+//   router.WaitUntilIdle();
 #pragma once
 
 #include <algorithm>
@@ -52,7 +39,6 @@
 #include <future>
 #include <iomanip>
 #include <iostream>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -63,7 +49,6 @@
 #include <thread>
 #include <tuple>
 #include <type_traits>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -71,9 +56,7 @@
 namespace uniflow
 {
 
-// ----------------------------------------------------------------------
-//  Time
-// ----------------------------------------------------------------------
+// ----- Time -----
 using Clock     = std::chrono::steady_clock;
 using TimePoint = Clock::time_point;
 using Duration  = Clock::duration;
@@ -83,9 +66,7 @@ inline double to_ms(Duration d)
     return std::chrono::duration<double, std::milli>(d).count();
 }
 
-// ----------------------------------------------------------------------
-//  Step result vocabulary - a step returns an *intent*, not a state change.
-// ----------------------------------------------------------------------
+// ----- StepAction: a step returns an intent, not a state change -----
 enum class StepAction : uint8_t
 {
     Stay,    // re-run the same step next tick (busy cooperative poll)
@@ -108,18 +89,7 @@ inline const char* to_string(StepAction a)
     return "?";
 }
 
-// ----------------------------------------------------------------------
-//  Async support types
-// ----------------------------------------------------------------------
-
-// Per-submission knobs for one UF_ASYNC call. Defaults: no timeout, no slow
-// warning, run on the pool named "default".
-struct AsyncOpts
-{
-    Duration                timeout = Duration::max(); // give-up deadline
-    std::optional<Duration> slow_warn_after;           // warn-if-still-pending
-    std::string             executor_name = "default"; // which pool to use
-};
+// ----- Async support -----
 
 // Stored in the async result slot when a submission exceeds its timeout.
 struct AsyncTimeout : std::runtime_error
@@ -151,9 +121,7 @@ struct AsyncRef
     const std::exception_ptr& exception() const { return _exc; }
 };
 
-// ----------------------------------------------------------------------
-//  Executor abstraction (whatever thread pool you bring)
-// ----------------------------------------------------------------------
+// ----- Executor abstraction -----
 class IExecutor
 {
 public:
@@ -164,7 +132,7 @@ public:
 
 // Runs the task synchronously on the calling thread. Useful for tests - the
 // whole flow becomes deterministic. NOT for production: it blocks the pump
-// thread inside UF_ASYNC and trips the SLOW CPU step warning on every submit.
+// thread inside UF_ASYNC.
 class InlineExecutor : public IExecutor
 {
 public:
@@ -172,93 +140,22 @@ public:
     size_t QueueDepth() const override { return 0; }
 };
 
-// Minimal fixed-size worker pool on std::thread + condvar queue. Bundled so
-// the framework runs out of the box; swap in your own IExecutor in production.
-class StdThreadPool : public IExecutor
-{
-public:
-    explicit StdThreadPool(std::size_t threads = 0)
-    {
-        if (threads == 0)
-            threads = std::max<unsigned>(1u, std::thread::hardware_concurrency());
-        workers_.reserve(threads);
-        for (std::size_t i = 0; i < threads; ++i)
-            workers_.emplace_back([this] { Worker(); });
-    }
-    ~StdThreadPool() override
-    {
-        {
-            std::lock_guard<std::mutex> lk(mu_);
-            stop_ = true;
-        }
-        cv_.notify_all();
-        for (auto& t : workers_)
-            if (t.joinable())
-                t.join();
-    }
-    StdThreadPool(const StdThreadPool&)            = delete;
-    StdThreadPool& operator=(const StdThreadPool&) = delete;
-
-    void Submit(std::function<void()> task) override
-    {
-        {
-            std::lock_guard<std::mutex> lk(mu_);
-            queue_.push_back(std::move(task));
-        }
-        cv_.notify_one();
-    }
-    size_t QueueDepth() const override
-    {
-        std::lock_guard<std::mutex> lk(mu_);
-        return queue_.size();
-    }
-
-private:
-    void Worker()
-    {
-        for (;;)
-        {
-            std::function<void()> task;
-            {
-                std::unique_lock<std::mutex> lk(mu_);
-                cv_.wait(lk, [&] { return stop_ || !queue_.empty(); });
-                if (stop_ && queue_.empty())
-                    return;
-                task = std::move(queue_.front());
-                queue_.pop_front();
-            }
-            try { task(); }
-            catch (...) { /* worker swallows; the promise carries it */ }
-        }
-    }
-
-    mutable std::mutex                mu_;
-    std::condition_variable           cv_;
-    std::deque<std::function<void()>> queue_;
-    std::vector<std::thread>          workers_;
-    bool                              stop_ = false;
-};
-
-// BSThreadPoolExecutor is defined at the bottom of this header, after the
-// inlined BS::thread_pool body (it needs the complete type as a member).
-
-// ----------------------------------------------------------------------
-//  Trace + observer
-// ----------------------------------------------------------------------
-// One recorded event in a flow's trace. The trace is the ordered list of
-// everything that happened during a flow; OnFlowEnded receives the whole
-// vector - that is what makes "how far did it get before failing" answerable.
+// ----- Trace + observer -----
+// One TraceEntry per STEP (not per tick) - Stay/Wait re-entries collapse
+// into a single entry recorded when the step finally Advance/Done/Fail'd.
+// `ticks` = how many times the body ran during that step.
 struct TraceEntry
 {
     enum class Kind { StepTransition, AsyncCompletion };
     Kind        kind;           // which of the two timing fields applies
     int         ordinal = 0;    // step number within the flow
     std::string name;           // step name or async job label
-    Duration    cpu_time  = {}; // StepTransition: main-thread time
-    Duration    wait_time = {}; // AsyncCompletion: pool wait time
+    int         ticks    = 0;   // StepTransition: body invocations in this step
+    double      step_ms  = 0.0; // StepTransition: wall time spent in this step
+    double      async_ms = 0.0; // AsyncCompletion: pool wait time in ms
     bool        had_error = false;
     bool        timed_out = false;
-    StepAction  action    = StepAction::Stay; // StepTransition: what the step returned
+    StepAction  action    = StepAction::Stay; // StepTransition: terminal action
 };
 
 // Counters that persist across runs of a flow on the same module. max_seen_
@@ -266,24 +163,28 @@ struct TraceEntry
 struct FlowStats
 {
     int         last_success_length = 0;
-    int         max_seen_length     = 0; // the "#M" denominator
+    int         max_seen_length     = 0;
     std::size_t success_count       = 0;
     std::size_t fail_count          = 0;
 };
 
-// Every log line / metric the framework produces is funnelled through one of
-// these hooks - the framework itself never touches std::cout. Subclass and
-// install with uniflow::SetObserver; override only the events you care about.
 // Origin record: where in the source did StartFlow get called?
 // Captured by the UF_START_FLOW macro (__FILE__ / __LINE__) and threaded
 // through OnFlowStarted / OnFlowEnded so logs can answer "who started this
-// flow?" - critical when a stray flow appears unexpectedly.
+// flow?".
 struct FlowOrigin
 {
     const char* file = nullptr; // nullptr when StartFlow was called raw
     int         line = 0;
 };
 
+// Every log line / metric the framework produces is funnelled through one of
+// these hooks - the framework itself never touches std::cout. Subclass and
+// pass via Runtime::Opts::observer; override only the events you care about.
+//
+// All time arguments are double milliseconds, rounded at the framework
+// boundary. Internal accounting still uses chrono::duration; the conversion
+// happens once here so user observers do not need to know about Duration.
 class IUniflowObserver
 {
 public:
@@ -296,19 +197,26 @@ public:
     virtual void OnFlowStarted(std::string_view /*obj*/,
                                FlowOrigin       /*origin*/) {}
 
-    // Fired immediately after every step body returns. Receive both axes
-    // of progress:
-    //   `step_ordinal` = how many DISTINCT steps have executed in this flow
-    //                    (only advances when a step returns Advance);
-    //   `tick`         = how many times the pump called THIS step body
-    //                    (includes Stay/Wait re-entries).
-    // `description` is whatever the step set with Describe(...) - empty if
-    // the step did not call Describe. `elapsed_cpu` is the wall time this
-    // single invocation held the pump thread (NOT the cumulative step time).
-    virtual void OnStepRan(std::string_view /*obj*/, std::string_view /*step*/,
-                           std::string_view /*description*/,
-                           int /*step_ordinal*/, int /*tick*/,
-                           Duration /*elapsed_cpu*/) {}
+    // Fired once per STEP (not per tick), at the moment the step transitions
+    // away - either Advance to a different step, or Done / Fail terminating
+    // the flow. Reports the step that JUST FINISHED, with totals accumulated
+    // over its entire lifetime (sum of every Stay/Wait re-entry plus the
+    // final return):
+    //
+    //   `step_ordinal`   = 0-based index of this step within the flow.
+    //   `ticks_in_step`  = how many times the body was invoked during this
+    //                      step (Stay/Wait re-entries plus the final call).
+    //   `elapsed_ms`     = wall time from step entry until this transition
+    //                      (the "how long did we sit in this step?" answer).
+    //   `description`    = the last value the step set via Describe(...).
+    //
+    // Use this for high-signal flow logs. There is no per-tick callback by
+    // design - a Stay/Wait loop iterating thousands of times no longer
+    // floods the observer.
+    virtual void OnStepChanged(std::string_view /*obj*/, std::string_view /*step*/,
+                               std::string_view /*description*/,
+                               int /*step_ordinal*/, int /*ticks_in_step*/,
+                               double /*elapsed_ms*/) {}
 
     // Fired when a step body throws. `what` is the exception's what() (or
     // "unknown" for non-std exceptions). The flow is forcibly Failed right
@@ -318,51 +226,49 @@ public:
                              std::string_view /*what*/,
                              int /*step_ordinal*/, int /*tick*/) {}
 
-    // Fired right after UF_ASYNC successfully enqueues `job` to a pool.
+    // Fired right after UF_ASYNC successfully enqueues `job` to the pool.
     virtual void OnAsyncSubmitted(std::string_view /*obj*/, std::string_view /*step*/,
                                   std::string_view /*job*/) {}
 
     // Fired once per async job, after the worker either returned a value,
     // threw, or missed its deadline.
     virtual void OnAsyncCompleted(std::string_view /*obj*/, std::string_view /*job*/,
-                                  Duration /*wait*/, bool /*had_error*/,
+                                  double /*wait_ms*/, bool /*had_error*/,
                                   bool /*timed_out*/) {}
 
     // Single-thread-protection alarm: a step held the pump thread longer
-    // than Config::slow_cpu_threshold this invocation.
+    // than Config::slow_cpu_threshold this single body invocation.
+    // Set the threshold to Duration::max() to disable.
     virtual void OnSlowCpuStep(std::string_view /*obj*/, std::string_view /*step*/,
-                               Duration /*cpu*/) {}
+                               double /*cpu_ms*/) {}
 
     // Fired at most once per async job, when its in-flight time crosses
-    // AsyncOpts::slow_warn_after.
+    // Config::slow_async_threshold. Set the threshold to Duration::max()
+    // (the default) to disable.
     virtual void OnSlowAsync(std::string_view /*obj*/, std::string_view /*job*/,
-                             Duration /*wait_so_far*/) {}
+                             double /*wait_so_far_ms*/) {}
 
     // Fired once when a flow leaves the running state via Done or Fail.
-    //   `terminal_action`     - Done or Fail
-    //   `final_step_ordinal`  - logical step count reached (Advance-only)
-    //   `total_ticks`         - total step body invocations (incl. re-entries)
-    //   `trace`               - ordered StepTransition + AsyncCompletion log
-    //   `wall_clock`          - flow start -> end wall time (== "total time
-    //                           the flow lived", e.g. for a 5 s machining
-    //                           cycle this is ~5 s)
-    //   `total_cpu`           - summed pump-thread time across every step
-    //                           body invocation (orders of magnitude smaller
-    //                           than wall_clock for a paced flow)
-    //   `total_async_wait`    - summed time the flow spent gated on async
-    //   `origin`              - UF_START_FLOW source location
+    //   `terminal_action`    - Done or Fail
+    //   `final_step_ordinal` - logical step count reached (Advance-only)
+    //   `total_ticks`        - total step body invocations (incl. re-entries)
+    //   `trace`              - ordered StepTransition + AsyncCompletion log
+    //   `wall_ms`            - flow start -> end wall time, ms
+    //   `total_step_ms`      - summed pump-thread time across every step
+    //                          body invocation, ms
+    //   `total_async_ms`     - summed time the flow spent gated on async, ms
+    //   `origin`             - UF_START_FLOW source location
     virtual void OnFlowEnded(std::string_view /*obj*/, StepAction /*terminal_action*/,
                              int /*final_step_ordinal*/, int /*total_ticks*/,
                              const std::vector<TraceEntry>& /*trace*/,
-                             Duration /*wall_clock*/, Duration /*total_cpu*/,
-                             Duration /*total_async_wait*/,
+                             double /*wall_ms*/, double /*total_step_ms*/,
+                             double /*total_async_ms*/,
                              const FlowStats& /*stats*/,
                              FlowOrigin       /*origin*/) {}
 };
 
-// Default observer - pretty-prints to stdout in fixed-width columns so the
-// log is easy to scan side-by-side on a wide monitor. Thread-safe: every
-// runtime's pump thread may call into it.
+// Default observer - pretty-prints to stdout in fixed-width columns. Thread-
+// safe: every Runtime's pump thread may call into it.
 //
 // Column layout (STEP rows):
 //   [ obj          ] step                       description                     #s/#t elapsed
@@ -370,7 +276,6 @@ public:
 class ConsoleObserver : public IUniflowObserver
 {
 public:
-    // Fixed widths: tune once here, every line follows.
     static constexpr int kColObj  = 14;
     static constexpr int kColStep = 28;
     static constexpr int kColDesc = 36;
@@ -383,17 +288,18 @@ public:
             std::cout << "  caller=" << origin.file << ":" << origin.line;
         std::cout << "\n";
     }
-    void OnStepRan(std::string_view obj, std::string_view step,
-                   std::string_view description,
-                   int step_ordinal, int tick,
-                   Duration elapsed_cpu) override
+    void OnStepChanged(std::string_view obj, std::string_view step,
+                       std::string_view description,
+                       int step_ordinal, int ticks_in_step,
+                       double elapsed_ms) override
     {
         std::lock_guard<std::mutex> lk(mu_);
         std::cout << "[" << pad(obj, kColObj) << "] "
                   << pad(step, kColStep) << " "
                   << pad(description, kColDesc) << " "
-                  << "#" << pad2(step_ordinal) << "/#" << pad2(tick)
-                  << " elapsed=" << fmt_ms(elapsed_cpu) << "\n";
+                  << "#" << pad2(step_ordinal)
+                  << " ticks=" << pad2(ticks_in_step)
+                  << " elapsed=" << fmt_ms(elapsed_ms) << "\n";
     }
     void OnStepThrew(std::string_view obj, std::string_view step,
                      std::string_view what,
@@ -414,39 +320,39 @@ public:
                   << "ASYNC SUBMIT  " << job << "\n";
     }
     void OnAsyncCompleted(std::string_view obj, std::string_view job,
-                          Duration wait, bool had_error, bool timed_out) override
+                          double wait_ms, bool had_error, bool timed_out) override
     {
         std::lock_guard<std::mutex> lk(mu_);
         std::cout << "[" << pad(obj, kColObj) << "] "
                   << pad("", kColStep) << " "
                   << "ASYNC DONE    " << job
-                  << "  wait=" << fmt_ms(wait);
+                  << "  wait=" << fmt_ms(wait_ms);
         if (timed_out)      std::cout << "  [TIMEOUT]";
         else if (had_error) std::cout << "  [ERROR]";
         std::cout << "\n";
     }
     void OnSlowCpuStep(std::string_view obj, std::string_view step,
-                       Duration cpu) override
+                       double cpu_ms) override
     {
         std::lock_guard<std::mutex> lk(mu_);
         std::cout << "[" << pad(obj, kColObj) << "] "
                   << pad(step, kColStep) << " "
-                  << "[SLOW CPU]  step held pump for " << fmt_ms(cpu) << "\n";
+                  << "[SLOW CPU]  step held pump for " << fmt_ms(cpu_ms) << "\n";
     }
     void OnSlowAsync(std::string_view obj, std::string_view job,
-                     Duration wait_so_far) override
+                     double wait_so_far_ms) override
     {
         std::lock_guard<std::mutex> lk(mu_);
         std::cout << "[" << pad(obj, kColObj) << "] "
                   << pad("", kColStep) << " "
                   << "[SLOW ASYNC]  " << job
-                  << "  pending=" << fmt_ms(wait_so_far) << "\n";
+                  << "  pending=" << fmt_ms(wait_so_far_ms) << "\n";
     }
     void OnFlowEnded(std::string_view obj, StepAction terminal_action,
                      int final_step_ordinal, int total_ticks,
                      const std::vector<TraceEntry>& /*trace*/,
-                     Duration wall_clock, Duration total_cpu,
-                     Duration total_async_wait, const FlowStats& /*stats*/,
+                     double wall_ms, double total_step_ms,
+                     double total_async_ms, const FlowStats& /*stats*/,
                      FlowOrigin origin) override
     {
         std::lock_guard<std::mutex> lk(mu_);
@@ -454,9 +360,9 @@ public:
                   << (terminal_action == StepAction::Done ? "END  DONE  " : "END  FAIL  ")
                   << "steps=#" << pad2(final_step_ordinal)
                   << " ticks=#" << pad2(total_ticks)
-                  << "  wall=" << fmt_ms(wall_clock)
-                  << "  cpu=" << fmt_ms(total_cpu)
-                  << "  async=" << fmt_ms(total_async_wait);
+                  << "  wall=" << fmt_ms(wall_ms)
+                  << "  step=" << fmt_ms(total_step_ms)
+                  << "  async=" << fmt_ms(total_async_ms);
         if (origin.file)
             std::cout << "  caller=" << origin.file << ":" << origin.line;
         std::cout << "\n";
@@ -476,54 +382,65 @@ private:
         os << std::setw(2) << std::setfill('0') << v;
         return os.str();
     }
-    static std::string fmt_ms(Duration d)
+    static std::string fmt_ms(double ms)
     {
         std::ostringstream os;
-        os << std::fixed << std::setprecision(2) << to_ms(d) << "ms";
+        os << std::fixed << std::setprecision(2) << ms << "ms";
         return os.str();
     }
     std::mutex mu_;
 };
 
-// ----------------------------------------------------------------------
-//  Config - global, set once before the first module/flow via uniflow::Configure
-// ----------------------------------------------------------------------
+// ----- Config: per-Runtime tuning (pass via Runtime::Opts) -----
 struct Config
 {
-    // A step holding the pump thread longer than this trips OnSlowCpuStep -
-    // the single-thread-protection alarm.
-    Duration slow_cpu_threshold = std::chrono::milliseconds(1);
-    // How long a pump cv-waits when every module on it is gated (no work).
-    // With the cv-wake path this is only the timer resolution for Wait(d)
-    // expiry when no external Notify() arrives - async completion and new
-    // flows wake the pump immediately.
-    Duration idle_sleep = std::chrono::milliseconds(1);
-    // Default polling cadence for the no-arg Wait() helper. Picked once at
-    // configure time; pass an explicit Wait(d) only when a step needs a
-    // different rhythm. Steps that re-enter on this default never need to
-    // think about polling - external Notify() will wake the pump anyway.
+    // How long the pump cv-waits when every module is gated (no work).
+    // This is only the timer resolution for Wait(d) expiry when no external
+    // Notify() arrives - async completion and new flows wake the pump
+    // immediately.
+    Duration idle_sleep        = std::chrono::milliseconds(1);
+
+    // Default polling cadence for the no-arg Wait() helper. Picked at
+    // Runtime construction; pass an explicit Wait(d) only when a step needs
+    // a different rhythm.
     Duration default_step_poll = std::chrono::milliseconds(20);
+
+    // OnSlowCpuStep alarm threshold. If a single step body invocation
+    // holds the pump thread for longer than this, OnSlowCpuStep fires
+    // once for that invocation. Set to Duration::max() to disable.
+    Duration slow_cpu_threshold   = std::chrono::milliseconds(5);
+
+    // OnSlowAsync alarm threshold. Fires once per async job, the first
+    // time the job's in-flight time crosses this. Default disabled - opt
+    // in by setting a finite value when you actually care.
+    Duration slow_async_threshold = Duration::max();
 };
 
-// ----------------------------------------------------------------------
-//  detail - the hidden machinery: runtime, pump threads, the static hub
-// ----------------------------------------------------------------------
+// ----- detail: hidden machinery -----
 namespace detail
 {
 
-// Set once per pump thread to the index of the runtime it drives; -1 on any
-// other thread. GetInst()/inst() use it to assert that cross-module access
-// stays within one runtime (one pump thread) - see DESIGN.md Sec.5-10.
+// Set once per pump thread to the Runtime's process-wide index; -1 on any
+// other thread. Useful for user-side asserts that catch cross-runtime
+// access (calling foo.something() from a step on a different Runtime is
+// unsafe because foo is being driven by a different pump thread).
 inline thread_local int t_runtime_idx = -1;
 
-// Uniflow<Derived> is a template, so a runtime cannot hold "all modules"
+// Monotonic counter so each Runtime gets a stable distinct index.
+inline std::atomic<int>& next_runtime_index()
+{
+    static std::atomic<int> n{0};
+    return n;
+}
+
+// Uniflow<Derived> is a template, so a Runtime cannot hold "all modules"
 // directly - each module is a different type. IUniflowObject is the
 // non-template base they share, so the pump can drive them uniformly.
 class IUniflowObject
 {
 public:
     virtual ~IUniflowObject()                   = default;
-    virtual bool IsIdle() const                 = 0; // no flow running?
+    virtual bool IsIdle() const                 = 0;
     // tick; ran a step? `force_wake` makes the module ignore its in-flight
     // Wait(d) gate this round - the pump sets it when an external Notify()
     // told us the world changed, so the step should re-evaluate its
@@ -531,36 +448,86 @@ public:
     virtual bool ExecuteOnce(IUniflowObserver&, bool force_wake) = 0;
 };
 
-// One runtime == one pump thread. Created and owned by Hub; never by the user.
-class UniflowRuntime
+// Forward-declared factory; defined at the bottom of this header, after the
+// BS::thread_pool body, because the default executor wraps that pool.
+std::unique_ptr<IExecutor> make_default_executor(std::size_t threads);
+
+} // namespace detail
+
+// ======================================================================
+//  Runtime - user-owned, exactly one per pump thread.
+//
+//  Construction spins up the pump thread, wires up the executor (default:
+//  BS::thread_pool with `Opts::threads` workers), the observer (default:
+//  ConsoleObserver), and the config. Destruction stops the pump and joins.
+//
+//  Modules attach to a Runtime via their `Uniflow(Runtime&)` ctor; the same
+//  Runtime drives every module attached to it.
+//
+//  Multi-runtime use:
+//    - Create more than one `Runtime` to get more than one pump thread.
+//    - A module belongs to exactly one Runtime; cross-runtime access from a
+//      step body is unsafe (no locks between modules on different pumps).
+//      Use `RuntimeIndex()` and `detail::t_runtime_idx` for asserts.
+// ======================================================================
+class Runtime
 {
 public:
-    explicit UniflowRuntime(int index) : index_(index)
+    struct Opts
+    {
+        // Worker thread count for the default executor. 0 picks
+        // hardware_concurrency. Ignored if `executor` is set.
+        std::size_t                       threads = 0;
+
+        // Override the executor. If null, a BS::thread_pool with `threads`
+        // workers is constructed internally.
+        std::unique_ptr<IExecutor>        executor;
+
+        // Override the observer. If null, a ConsoleObserver is used.
+        std::unique_ptr<IUniflowObserver> observer;
+
+        // Per-Runtime config.
+        Config                            config{};
+    };
+
+    Runtime() : Runtime(Opts{}) {}
+    explicit Runtime(Opts opts)
+        : index_(detail::next_runtime_index().fetch_add(1)),
+          config_(opts.config),
+          executor_(opts.executor
+                    ? std::move(opts.executor)
+                    : detail::make_default_executor(opts.threads)),
+          observer_(opts.observer
+                    ? std::move(opts.observer)
+                    : std::make_unique<ConsoleObserver>())
     {
         pump_ = std::thread([this] { pump_loop(); });
     }
-    ~UniflowRuntime()
+
+    ~Runtime()
     {
         stop_.store(true, std::memory_order_relaxed);
-        Notify(); // wake the pump out of its idle wait so it can observe stop_
+        Notify();
         if (pump_.joinable())
             pump_.join();
     }
-    UniflowRuntime(const UniflowRuntime&)            = delete;
-    UniflowRuntime& operator=(const UniflowRuntime&) = delete;
 
-    int index() const { return index_; }
+    Runtime(const Runtime&)            = delete;
+    Runtime& operator=(const Runtime&) = delete;
 
-    // Register / unregister a module with this runtime's pump. A module's base
-    // ctor attaches; its base dtor detaches. The pump holds objects_mu_ for the
-    // whole round, so detach (from a non-pump thread) lands strictly between
-    // rounds - the pump never touches a module mid-destruction.
-    void attach(IUniflowObject* m)
+    int               index()    const { return index_; }
+    IExecutor&        executor()       { return *executor_; }
+    IUniflowObserver& observer()       { return *observer_; }
+    const Config&     config()   const { return config_; }
+
+    // -- Called by Uniflow base; could be friended, but the surface is
+    //    small enough to keep public without leaking machinery to users --
+    void attach(detail::IUniflowObject* m)
     {
         std::lock_guard<std::recursive_mutex> lk(objects_mu_);
         objects_.push_back(m);
     }
-    void detach(IUniflowObject* m)
+    void detach(detail::IUniflowObject* m)
     {
         std::lock_guard<std::recursive_mutex> lk(objects_mu_);
         objects_.erase(std::remove(objects_.begin(), objects_.end(), m),
@@ -571,10 +538,8 @@ public:
     //   - any async worker right after it has set the result on its promise,
     //   - StartFlow() when a module transitions from idle to active,
     //   - the runtime destructor (so stop_ is observed without delay),
-    //   - external signallers via uniflow::NotifyAll() (e.g. an IRQ-style
-    //     callback that just flipped a condition some step is waiting on).
-    // Cheap and lock-free in the steady state - if the pump is busy running
-    // a round, the only effect is that the flag is already true.
+    //   - external signallers that just flipped a condition some step
+    //     is waiting on (e.g. an IRQ-style HW-ready callback).
     //
     // Also sets the external-wake flag so the NEXT round will bypass every
     // module's Wait(d) gate once: a step that returned Wait() will be given
@@ -589,329 +554,65 @@ public:
         }
         wake_cv_.notify_one();
     }
-    // Read-and-clear the external-wake flag. Used by pump_loop to decide
-    // whether to ask every module to bypass its Wait(d) gate this round.
+
     bool consume_external_wake()
     {
         return ext_wake_observed_.exchange(false, std::memory_order_acquire);
     }
 
 private:
-    void pump_loop(); // defined after Hub (it reads Hub's observer + config)
-
-    int                          index_;
-    std::recursive_mutex         objects_mu_; // recursive: a step may attach a
-    std::vector<IUniflowObject*> objects_;    // freshly lazy-created module
-    std::atomic<bool>            stop_{false};
-
-    // Wake channel: pump sleeps on wake_cv_ at the end of a no-work round;
-    // any external event (async completion, new flow) calls Notify().
-    std::mutex                   wake_mu_;
-    std::condition_variable      wake_cv_;
-    bool                         wake_pending_flag_ = false;
-    // Sticky flag set by Notify(), consumed once per pump round. While true,
-    // ExecuteOnce is told to bypass each module's Wait(d) gate so steps that
-    // are polling on an external condition get a chance to re-evaluate at
-    // once. Atomic because Notify() runs on arbitrary threads.
-    std::atomic<bool>            ext_wake_observed_{false};
-
-    std::thread                  pump_;
-};
-
-// The static hub: owns the runtimes, the executors, the observer, the config.
-// Lazily creates 1 runtime if uniflow::Init() was never called. A Meyers
-// singleton - and the only one in the framework.
-class Hub
-{
-public:
-    static Hub& get()
+    void pump_loop()
     {
-        static Hub h;
-        return h;
-    }
-
-    // -- opt-in setup; all must run before the first module/flow exists --
-    void init(int n)
-    {
-        std::lock_guard<std::mutex> lk(mu_);
-        require_not_started("uniflow::Init()");
-        desired_ = (n < 1) ? 1 : n;
-    }
-    void configure(const Config& c)
-    {
-        std::lock_guard<std::mutex> lk(mu_);
-        require_not_started("uniflow::Configure()");
-        cfg_ = c;
-    }
-    void register_executor(std::string name, std::shared_ptr<IExecutor> e)
-    {
-        std::lock_guard<std::mutex> lk(mu_);
-        require_not_started("uniflow::RegisterExecutor()");
-        executors_[std::move(name)] = std::move(e);
-    }
-    void set_observer(std::unique_ptr<IUniflowObserver> o)
-    {
-        std::lock_guard<std::mutex> lk(mu_);
-        require_not_started("uniflow::SetObserver()");
-        observer_ = std::move(o);
-    }
-
-    // -- used by modules at construction / async submission --
-    UniflowRuntime& runtime(int idx)
-    {
-        boot();
-        if (idx < 0 || idx >= static_cast<int>(runtimes_.size()))
-            throw std::out_of_range(
-                "uniflow: runtime index " + std::to_string(idx)
-                + " out of range [0," + std::to_string(runtimes_.size()) + ")");
-        return *runtimes_[static_cast<std::size_t>(idx)];
-    }
-    int runtime_count()
-    {
-        boot();
-        return static_cast<int>(runtimes_.size());
-    }
-    // Wake every runtime's pump out of its cv-wait at once. Safe to call
-    // from any thread - it does not touch module state, only the wake
-    // channel. Public surface goes through uniflow::NotifyAll() below.
-    void notify_all_runtimes()
-    {
-        // No boot() here: if no runtime has ever been created there is
-        // nothing to wake, and we do not want to lazy-spin pumps for the
-        // sake of a wake.
-        std::lock_guard<std::mutex> lk(mu_);
-        for (auto& rt : runtimes_)
-            if (rt) rt->Notify();
-    }
-    IExecutor& executor(const std::string& name)
-    {
-        boot();
-        auto it = executors_.find(name);
-        if (it == executors_.end())
-            throw std::runtime_error("uniflow: unknown executor '" + name + "'");
-        return *it->second;
-    }
-    IUniflowObserver& observer() { return *observer_; }
-    const Config&     config() const { return cfg_; }
-
-private:
-    Hub() = default;
-    ~Hub()
-    {
-        // Destroy the runtimes first - stops and joins every pump thread -
-        // while observer_ and cfg_ are still alive for any final pump round.
-        runtimes_.clear();
-    }
-
-    void require_not_started(const char* who)
-    {
-        if (started_)
-            throw std::logic_error(std::string(who)
-                + " must be called before any module or flow is created");
-    }
-
-    // First touch of any runtime/executor freezes setup and spins up the pumps.
-    void boot()
-    {
-        std::lock_guard<std::mutex> lk(mu_);
-        if (started_)
-            return;
-        started_ = true;
-        if (!observer_)
-            observer_ = std::make_unique<ConsoleObserver>();
-        if (executors_.find("default") == executors_.end())
-            executors_["default"] = std::make_shared<StdThreadPool>(0);
-        runtimes_.reserve(static_cast<std::size_t>(desired_));
-        for (int i = 0; i < desired_; ++i)
-            runtimes_.push_back(std::make_unique<UniflowRuntime>(i));
-    }
-
-    std::mutex                                            mu_;
-    bool                                                  started_  = false;
-    int                                                   desired_  = 1;
-    Config                                                cfg_;
-    std::map<std::string, std::shared_ptr<IExecutor>>     executors_;
-    std::unique_ptr<IUniflowObserver>                     observer_;
-    // Declared last -> destroyed first: pumps join before observer_/cfg_ die.
-    std::vector<std::unique_ptr<UniflowRuntime>>          runtimes_;
-};
-
-// The pump loop - the single thread that drives one runtime. Each round ticks
-// every non-idle module once (round-robin: no module starves another). If the
-// round did real work, loop again at once; if nothing was active, sleep on the
-// wake condition variable - external events (async completion, StartFlow) call
-// Notify() to wake the pump immediately, so response latency is not bounded by
-// Config::idle_sleep. idle_sleep is now only the timer resolution for Wait(d)
-// expiry when no external event is in flight.
-inline void UniflowRuntime::pump_loop()
-{
-    t_runtime_idx = index_;
-    for (;;)
-    {
-        if (stop_.load(std::memory_order_relaxed))
-            return;
-        // Consume the external-wake flag ONCE per round. If set, every
-        // module's Wait(d) gate is bypassed for this round so steps
-        // polling on an external condition get to re-evaluate at once.
-        bool force_wake = consume_external_wake();
-        bool ran_step   = false;
+        detail::t_runtime_idx = index_;
+        for (;;)
         {
-            // Held for the whole round. Index-based loop so a module that a
-            // running step lazily creates (push_back) is tolerated; idle
-            // newcomers are simply skipped this round.
-            std::lock_guard<std::recursive_mutex> lk(objects_mu_);
-            for (std::size_t i = 0; i < objects_.size(); ++i)
+            if (stop_.load(std::memory_order_relaxed))
+                return;
+            bool force_wake = consume_external_wake();
+            bool ran_step   = false;
             {
-                IUniflowObject* o = objects_[i];
-                if (o->IsIdle())
-                    continue;
-                if (o->ExecuteOnce(Hub::get().observer(), force_wake))
-                    ran_step = true;
+                std::lock_guard<std::recursive_mutex> lk(objects_mu_);
+                for (std::size_t i = 0; i < objects_.size(); ++i)
+                {
+                    detail::IUniflowObject* o = objects_[i];
+                    if (o->IsIdle())
+                        continue;
+                    if (o->ExecuteOnce(*observer_, force_wake))
+                        ran_step = true;
+                }
+            }
+            if (!ran_step)
+            {
+                std::unique_lock<std::mutex> lk(wake_mu_);
+                wake_cv_.wait_for(lk, config_.idle_sleep,
+                                  [this] { return wake_pending_flag_; });
+                wake_pending_flag_ = false;
             }
         }
-        // No module ran a step this round - every active one is gated on a
-        // pending async or a Wait(). Wait on the cv until either:
-        //   - an external Notify() arrives (async completion, new flow), or
-        //   - idle_sleep elapses (re-check Wait(d) timers).
-        if (!ran_step)
-        {
-            std::unique_lock<std::mutex> lk(wake_mu_);
-            wake_cv_.wait_for(lk, Hub::get().config().idle_sleep,
-                              [this] { return wake_pending_flag_; });
-            wake_pending_flag_ = false;
-        }
     }
-}
 
-} // namespace detail
+    int                               index_;
+    Config                            config_;
+    std::unique_ptr<IExecutor>        executor_;
+    std::unique_ptr<IUniflowObserver> observer_;
 
-// ----------------------------------------------------------------------
-//  Public setup surface - all optional, all before the first module/flow
-// ----------------------------------------------------------------------
+    std::recursive_mutex                 objects_mu_;
+    std::vector<detail::IUniflowObject*> objects_;
+    std::atomic<bool>                    stop_{false};
 
-// Create N runtimes (N pump threads) instead of the lazy default of 1. Opt-in:
-// most programs never call this. Must run before any module/flow is created.
-inline void Init(int runtime_count)
-{
-    detail::Hub::get().init(runtime_count);
-}
+    std::mutex                           wake_mu_;
+    std::condition_variable              wake_cv_;
+    bool                                 wake_pending_flag_ = false;
+    std::atomic<bool>                    ext_wake_observed_{false};
 
-// Override the global Config (slow-CPU threshold, idle sleep).
-inline void Configure(const Config& cfg)
-{
-    detail::Hub::get().configure(cfg);
-}
+    std::thread                          pump_;
+};
 
-// Register a named thread pool, selectable per call via AsyncOpts::executor_name.
-// A pool named "default" is created automatically if none is registered.
-inline void RegisterExecutor(std::string name, std::shared_ptr<IExecutor> exec)
-{
-    detail::Hub::get().register_executor(std::move(name), std::move(exec));
-}
-
-// Replace the default ConsoleObserver with your own logger / metrics sink.
-inline void SetObserver(std::unique_ptr<IUniflowObserver> observer)
-{
-    detail::Hub::get().set_observer(std::move(observer));
-}
-
-// Wake every runtime's pump out of its cv-wait at once. Use from a
-// signaller that just flipped a condition some step is waiting on
-// (e.g. an IRQ-style callback that sets a hardware-ready flag): without
-// this call, the step would not re-evaluate the predicate until its
-// Wait()'s timer expires. Safe to call from any thread; cheap when no
-// pump is sleeping.
-inline void NotifyAll()
-{
-    detail::Hub::get().notify_all_runtimes();
-}
-
-// ----------------------------------------------------------------------
-//  Tutorial: two ways to wait inside a step
-//
-//  Most "the step is waiting for X" patterns fall into one of two shapes.
-//  uniflow gives both a first-class form so you do not have to invent your
-//  own state-tracking; pick whichever matches the underlying work.
-//
-//  --- (1) Async pool: offload blocking work, get woken on completion ---
-//
-//      StepResult OnQuery_Begin() {
-//          UF_ASYNC(DoBlockingLookup, key_);    // hands `DoBlockingLookup`
-//          return UF_NEXT(OnQuery_HaveResult);  // to the BS thread pool
-//      }
-//      StepResult OnQuery_HaveResult() {
-//          auto r = AsyncResult<Record>();
-//          if (r.failed())     return Fail();
-//          if (r.is_timeout()) return Fail();
-//          record_ = std::move(r.value());
-//          return UF_NEXT(OnQuery_Done);
-//      }
-//      static Record DoBlockingLookup(std::string key) { ... }  // runs on pool
-//
-//    Use when the work is genuinely blocking (network I/O, file read,
-//    long compute). The pump thread never blocks; the moment the worker
-//    returns, the pool worker wakes the pump and the continuation step
-//    runs immediately - response latency floor is the cv-wake (~us), not
-//    the polling interval.
-//
-//  --- (2) UFTimer poll: wait for a condition (flag, status, time) ---
-//
-//      return UF_NEXT(OnInit_WaitReady, UFTimer{});
-//
-//      StepResult OnInit_WaitReady(UFTimer& t) {
-//          if (t.TimedOut(1000ms))    return Fail();
-//          if (!Hw::ReadySignal())    return Wait();   // re-enter shortly
-//          return UF_NEXT(OnInit_Run);
-//      }
-//
-//    Use when the work is OFF in the world somewhere (a HW flag flipping,
-//    a peer module's state changing) and there is no "completion callback"
-//    you own. The step re-enters on its polling cadence (Config::default_
-//    step_poll, or whatever Wait(d) you pass). If the producer of the
-//    condition calls uniflow::NotifyAll() when it flips the flag, the pump
-//    wakes immediately and the step re-evaluates on the very next round.
-//
-//  Quick chooser:
-//                            Async pool          UFTimer poll
-//    Work runs              another thread       producer side (or none)
-//    Pump wake on event     yes, automatic       only if producer Notifies
-//    Best for               blocking I/O, CPU    HW flags, peer state
-//    Wrong fit              fast/in-process      large blocking calls
-//                           transformations      (would tie up the pump)
-// ----------------------------------------------------------------------
-
-// ----------------------------------------------------------------------
-//  UFTimer - "wait for a condition with a deadline" helper for steps.
-//
-//  Two ways to use it. Idiomatic (procedural, no switch):
-//
-//      StepResult OnInit_WaitHwReady(UFTimer t) {
-//          if (GlobalEnv::Stop())      return Done();
-//          if (t.TimedOut(1000ms))     return Fail();
-//          if (!Hw::ReadySignal())     return Wait();
-//          return UF_NEXT(OnInit_NextStep);
-//      }
-//
-//  Or compact (one-shot OnWait + switch when you want all three branches
-//  visible at a glance):
-//
-//      switch (t.OnWait(Hw::ReadySignal, 1000ms)) {
-//      case UFTimer::Done:    return UF_NEXT(OnInit_NextStep);
-//      case UFTimer::Timeout: return Fail();
-//      case UFTimer::Waiting: return Wait();
-//      }
-//
-//  Construction snapshots the start time, so re-entries of the same step
-//  (after Wait()) keep counting from the original arming. Value semantics:
-//  pass it through UF_NEXT by value; copies share no mutable state.
-//
-//  Note on responsiveness: the condition is re-evaluated only when the
-//  pump invokes the step. If the step returned Wait() and the predicate
-//  becomes true mid-wait, the step does not re-run until the wait expires -
-//  unless whoever flipped the predicate also called uniflow::NotifyAll() to
-//  wake the pump (uniflow's async path does this automatically; manual
-//  signallers must do it themselves).
-// ----------------------------------------------------------------------
+// Two ways to wait in a step:
+//   (1) UF_ASYNC: offload blocking work to the pool; pump is woken on
+//       completion. Best for I/O, CPU work.
+//   (2) UFTimer: poll a condition with a deadline. Best for HW flags or
+//       peer state where there is no completion callback.
 class UFTimer
 {
 public:
@@ -919,27 +620,10 @@ public:
 
     UFTimer() : armed_at_(Clock::now()) {}
 
-    // Re-arm: the deadline is measured from this call onward.
     void Restart() { armed_at_ = Clock::now(); }
-
     Duration Elapsed() const { return Clock::now() - armed_at_; }
-
-    // Shorthand for the if-pattern: "has the deadline passed yet?"
     bool TimedOut(Duration deadline) const { return Elapsed() >= deadline; }
 
-    // Compact one-shot: classify the wait state.
-    //   true / predicate returns true -> Done
-    //   timeout reached                -> Timeout
-    //   else                            -> Waiting
-    //
-    // The first overload takes any callable (lambda, free function ptr,
-    // etc.) and only invokes it when checking - useful if the condition
-    // is expensive or has side effects.
-    //
-    // The second overload takes an already-evaluated bool - useful when
-    // the condition is just a flag set by another thread (HW IRQ,
-    // background worker) and you would have called the function once
-    // before passing it in anyway.
     template <class Predicate,
               std::enable_if_t<std::is_invocable_r_v<bool, Predicate>, int> = 0>
     Result OnWait(Predicate condition, Duration timeout) const
@@ -959,28 +643,14 @@ private:
     TimePoint armed_at_;
 };
 
-// ----------------------------------------------------------------------
-//  Uniflow<Derived> - the CRTP base your modules inherit
-//
-//  CRTP = Curiously Recurring Template Pattern: a module inherits from the base
-//  parameterised on *itself* - `class Arm : Uniflow<Arm>`. That hands the base
-//  the derived type at compile time, so step functions are pointers-to-member
-//  of the derived class and run with no virtual dispatch.
-//
-//  Put UF_USES_UNIFLOW(Cls) - or UF_SINGLETON(Cls) - once in the class body.
-// ----------------------------------------------------------------------
+// Uniflow<Derived> - CRTP base. Module: `class Foo : public Uniflow<Foo>`
+// + `UF_USES_UNIFLOW(Foo)` + a ctor taking `Runtime&`. No UF_SINGLETON -
+// hold modules as members of your own App and expose `App::inst()`.
 template <class Derived>
 class Uniflow : public detail::IUniflowObject
 {
 public:
-    // What a step returns: an intent, not a state change. The runtime reads
-    // `action` and, for Advance, calls `next_fn` next tick. `next_name` is
-    // the step's name string, captured by UF_NEXT(#fn) purely for the trace.
-    //
-    // next_fn is a std::function<StepResult()> built by UF_NEXT - it has
-    // already captured any forwarded args, so the pump just invokes it with
-    // no arguments. The entry step and every subsequent step go through the
-    // exact same path; there is no "entry vs steady" split anymore.
+    // What a step returns: an intent, not a state change.
     struct StepResult
     {
         StepAction                  action    = StepAction::Stay;
@@ -989,61 +659,26 @@ public:
         Duration                    delay     = {};      // set only when Wait
     };
 
-    // -- Constructors (inherited into Derived via UF_USES_UNIFLOW) --
-    //   Uniflow()                       anonymous, runtime 0
-    //   Uniflow("name")                 named,     runtime 0
-    //   Uniflow(2)                      anonymous, runtime 2
-    //   Uniflow("name", 2)              named,     runtime 2
-    // A type may have at most one *anonymous* instance (auto-named after the
-    // class); a second one throws - name them. Names are unique per type only.
-    Uniflow() : Uniflow(nullptr, 0) {}
-    explicit Uniflow(const char* name) : Uniflow(name, 0) {}
-    explicit Uniflow(int runtime_index) : Uniflow(nullptr, runtime_index) {}
-
-    Uniflow(const char* name, int runtime_index)
-        : runtime_index_(runtime_index)
+    // -- Constructors --
+    //   Uniflow(rt)         anonymous (auto-named after the class)
+    //   Uniflow(rt, "name") named
+    // The base attaches the module to `rt` and starts driving it on the
+    // next pump round (initially idle - no flow until StartFlow()).
+    explicit Uniflow(Runtime& rt) : Uniflow(rt, nullptr) {}
+    Uniflow(Runtime& rt, const char* name)
+        : runtime_(&rt)
     {
-        const bool anon = (name == nullptr);
-        instance_name_  = anon ? Derived::uf_class_name_() : std::string(name);
-        is_anonymous_   = anon;
-
-        // Claim identity in this type's registry (see GetInst / inst()).
-        {
-            Registry& reg = registry();
-            std::lock_guard<std::mutex> lk(reg.mu);
-            if (anon && reg.anon_used)
-                throw std::logic_error(
-                    std::string("uniflow: a second anonymous instance of '")
-                    + Derived::uf_class_name_()
-                    + "' - give your instances explicit names");
-            if (!reg.by_name.emplace(instance_name_,
-                                     static_cast<Derived*>(this)).second)
-                throw std::logic_error(
-                    std::string("uniflow: duplicate instance name '")
-                    + instance_name_ + "' for type "
-                    + Derived::uf_class_name_());
-            if (anon)
-                reg.anon_used = true;
-        }
-
-        // Join a runtime's pump. Safe even though Derived is not fully built:
-        // the module is idle (no flow) until StartFlow(), and the pump skips it.
-        runtime_ = &detail::Hub::get().runtime(runtime_index);
+        instance_name_ = name ? std::string(name) : Derived::uf_class_name_();
         runtime_->attach(this);
     }
 
     ~Uniflow() override
     {
-        // Destroying a module mid-flow is a use-after-free hazard (the pump may
-        // be in its step). Contract: destroy modules only when idle.
+        // Destroying a module mid-flow is a use-after-free hazard (the pump
+        // may be in its step). Contract: destroy modules only when idle.
         assert(!flow_running_ && "uniflow: module destroyed while a flow runs");
         if (runtime_)
-            runtime_->detach(this); // blocks until the current round ends
-        Registry& reg = registry();
-        std::lock_guard<std::mutex> lk(reg.mu);
-        reg.by_name.erase(instance_name_);
-        if (is_anonymous_)
-            reg.anon_used = false;
+            runtime_->detach(this);
     }
 
     Uniflow(const Uniflow&)            = delete;
@@ -1059,20 +694,7 @@ public:
 
     // -- Public control surface --
 
-    // Start a flow at entry step `fn`, forwarding `args` to it. Any step
-    // (entry or steady) may take parameters: UF_NEXT(fn, args...) captures
-    // them into the next step fn the same way StartFlow does for the entry.
-    // Returns false if a flow is already running. Thread-safe - serialised
-    // with the pump by the per-module mutex; writes the caller makes before
-    // StartFlow() are visible to the flow.
-    //
-    // Two entry points:
-    //   StartFlow(fn, args...)                 - raw, origin = {nullptr, 0}
-    //   StartFlowAt(file, line, fn, args...)   - records source location;
-    //                                            normally invoked through
-    //                                            the UF_START_FLOW(mod, fn,
-    //                                            args...) macro which fills
-    //                                            in __FILE__ / __LINE__.
+    // Start a flow at entry step `fn`, forwarding `args` to it.
     template <class... Params, class... Args>
     bool StartFlow(StepResult (Derived::*fn)(Params...), Args&&... args)
     {
@@ -1087,8 +709,6 @@ public:
             return false;
 
         Derived* self = static_cast<Derived*>(this);
-        // Decay-copy the args into the step fn so the entry step can be re-run
-        // (a Stay) and never reaches back into the caller's storage.
         curr_fn_ =
             [self, fn,
              tup = std::tuple<std::decay_t<Args>...>(std::forward<Args>(args)...)]
@@ -1100,12 +720,15 @@ public:
                     tup);
             };
 
+        auto now              = Clock::now();
         flow_running_         = true;
         curr_step_name_       = "(entry)";
         curr_step_description_.clear();
         step_ordinal_         = 0;
         tick_count_           = 0;
-        flow_started_at_      = Clock::now();
+        ticks_in_step_        = 0;
+        flow_started_at_      = now;
+        step_started_at_      = now;
         total_cpu_            = {};
         total_async_          = {};
         async_pending_        = false;
@@ -1115,8 +738,6 @@ public:
         flow_started_pending_ = true;
         flow_origin_          = FlowOrigin{origin_file, origin_line};
 
-        // Wake the pump in case it was idle-waiting. Without this, the new
-        // flow would not start running until the pump's next idle_sleep tick.
         if (runtime_)
             runtime_->Notify();
         return true;
@@ -1124,9 +745,7 @@ public:
 
     // Block the calling thread until the running flow finishes (returns at
     // once if already idle). Call from the OWNING thread - never from inside
-    // a step. Named WaitUntilIdle (not Wait) so it cannot be confused with
-    // the protected static Wait()/Wait(d) step-result helpers that are in
-    // scope inside every step body.
+    // a step.
     void WaitUntilIdle()
     {
         std::unique_lock<std::mutex> lk(op_mu_);
@@ -1134,106 +753,50 @@ public:
     }
 
     const std::string& InstanceName() const { return instance_name_; }
-    int                RuntimeIndex() const { return runtime_index_; }
-
-    // Read the current step's description (last value set by Describe(...)
-    // in the running step). Safe between modules on the SAME runtime - the
-    // same pump thread that mutates it is the only thread that reads it.
-    // Used by visualisation modules to surface human-readable per-module
-    // status without a dedicated phase_ string in every module class.
+    int                RuntimeIndex() const { return runtime_->index(); }
     const std::string& CurrentStepDescription() const { return curr_step_description_; }
-
-    // -- Cross-module access --
-    // Fetch another module of this type by name (or the anonymous one). Safe
-    // only between modules on the *same* runtime - a debug assert guards it.
-    static Derived& GetInst(const char* name)
-    {
-        Registry& reg = registry();
-        std::lock_guard<std::mutex> lk(reg.mu);
-        auto it = reg.by_name.find(name ? name : "");
-        if (it == reg.by_name.end())
-            throw std::logic_error(
-                std::string("uniflow: no instance '") + (name ? name : "")
-                + "' of type " + Derived::uf_class_name_());
-        Derived* p = it->second;
-        assert((detail::t_runtime_idx < 0
-                || detail::t_runtime_idx == p->runtime_index_)
-               && "uniflow: cross-runtime GetInst - access is unsafe across "
-                  "pump threads");
-        return *p;
-    }
-    static Derived& GetInst() { return GetInst(Derived::uf_class_name_()); }
 
 protected:
     // -- Helpers your step functions return --
     static StepResult Stay() { return {StepAction::Stay, {}, nullptr, {}}; }
     static StepResult Done() { return {StepAction::Done, {}, nullptr, {}}; }
     static StepResult Fail() { return {StepAction::Fail, {}, nullptr, {}}; }
-    // Re-run this same step, but not before `d` has elapsed. The paced
-    // counterpart of Stay() - for "poll again soon" or "let motion advance"
-    // without the pump busy-spinning.
     static StepResult Wait(Duration d)
     {
         return {StepAction::Wait, {}, nullptr, d};
     }
-    // No-arg overload: hold for the configured default poll cadence
-    // (Config::default_step_poll). Use this when the step does not care
-    // about polling rhythm and an external Notify() will wake it anyway -
-    // which is the common case for "wait until some condition flips."
-    static StepResult Wait()
+    // No-arg overload: hold for the Runtime's configured default poll
+    // cadence (Config::default_step_poll). Non-static because it reads
+    // the per-Runtime config.
+    StepResult Wait() const
     {
-        return Wait(detail::Hub::get().config().default_step_poll);
+        return Wait(runtime_->config().default_step_poll);
     }
 
     // Per-module exception policy. Override in Derived to control what
     // happens when a step body throws:
-    //
-    //   return false  (default)  - the pump LOGS the throw through
-    //                              OnStepThrew, then RETHROWS. The
-    //                              exception leaves the pump thread and,
-    //                              with no enclosing handler, the C++
-    //                              runtime calls std::terminate. Strong
-    //                              fail-fast: a thrown step is a bug,
-    //                              crash loudly with a stack trace.
-    //
-    //   return true              - the pump LOGS the throw, then ends
-    //                              the flow as Fail and keeps running.
-    //                              The pump survives, other modules are
-    //                              unaffected, and the next StartFlow on
-    //                              this module starts a clean flow. Pick
-    //                              this for modules where a thrown step
-    //                              is recoverable (e.g. a network module
-    //                              that should reconnect rather than take
-    //                              the whole process down).
-    //
-    // This is a CRTP hook (not virtual): a static call into Derived. Zero
-    // runtime overhead when not overridden; the optimiser folds the
-    // default `return false` straight into the branch.
+    //   return false (default) - rethrow (std::terminate); fail-fast crash.
+    //   return true             - log via OnStepThrew, end the flow as Fail,
+    //                             pump survives.
     bool CatchStepExceptions() const { return false; }
 
-    // Attach a human-readable description to the current step. Threaded
-    // through to OnStepRan as `description` and into FLOW END logs. Pure
-    // logging metadata - the runtime never inspects it.
-    //
-    // Re-entries (Stay / Wait) keep the previously set description until
-    // the step overrides it; Advance clears it for the next step.
-    //
-    // Variadic ostream-style: every argument is forwarded into a stringstream
-    // with operator<<, so any printable type works.
-    //
-    //   Describe("loading raw part from zone ", zone_letter, " (", x_mm, "mm)");
+    // Wake this module's Runtime out of its idle wait, and bypass every
+    // module's Wait(d) gate once on the next pump round. Use from a non-
+    // step method that just flipped a condition some peer module's step
+    // is polling - e.g. a state mutator called by another module's step.
+    void NotifyRuntime() { if (runtime_) runtime_->Notify(); }
+
+    // Attach a human-readable description to the current step.
     template <class... Args>
     void Describe(Args&&... args)
     {
         std::ostringstream os;
-        (os << ... << std::forward<Args>(args));   // C++17 fold expression
+        (os << ... << std::forward<Args>(args));
         curr_step_description_ = os.str();
     }
 
     // Advance to step `Fn` (a member-function pointer baked in at compile
-    // time as a non-type template parameter). Captures any forwarded args
-    // into the step fn so the next step is invoked with the same arguments
-    // the caller wrote in the UF_NEXT macro. Not called directly - go
+    // time as a non-type template parameter). Not called directly - go
     // through UF_NEXT(fn) or UF_NEXT(fn, arg1, arg2, ...).
     template <auto Fn, class... Args>
     StepResult Next_(const char* name, Args&&... args)
@@ -1241,7 +804,6 @@ protected:
         Derived* self = static_cast<Derived*>(this);
         if constexpr (sizeof...(Args) == 0)
         {
-            // Fast path: no captured args, no tuple, no apply.
             return {StepAction::Advance,
                     [self]() -> StepResult { return (self->*Fn)(); },
                     name, {}};
@@ -1262,9 +824,10 @@ protected:
         }
     }
 
-    // Submit a static function to a thread pool. Use UF_ASYNC / UF_ASYNC_OPT.
+    // Submit a static function to the Runtime's executor. Use UF_ASYNC /
+    // UF_ASYNC_TIMEOUT. `timeout` of Duration::max() means no deadline.
     template <auto Fn, class... Args>
-    void SubmitAsync(const char* job_label, AsyncOpts opts, Args&&... args);
+    void SubmitAsync(const char* job_label, Duration timeout, Args&&... args);
 
     // Read the result of the most-recent async submission. Call from the
     // continuation step (the one UF_NEXT named right after UF_ASYNC).
@@ -1277,20 +840,6 @@ protected:
     }
 
 private:
-    // Per-type instance registry - distinct for each Uniflow<Derived>, since
-    // CRTP makes each a separate class. Keyed by name; tracks the anonymous one.
-    struct Registry
-    {
-        std::mutex                                mu;
-        std::unordered_map<std::string, Derived*> by_name;
-        bool                                      anon_used = false;
-    };
-    static Registry& registry()
-    {
-        static Registry r;
-        return r;
-    }
-
     // Reset to idle once a flow reaches Done / Fail. Also wakes the runtime
     // so any module waiting on this one's idleness (e.g. the orchestrator)
     // observes the transition immediately, not on the next idle_sleep tick.
@@ -1302,6 +851,7 @@ private:
         curr_step_description_.clear();
         step_ordinal_   = 0;
         tick_count_     = 0;
+        ticks_in_step_  = 0;
         async_pending_  = false;
         slow_warned_    = false;
         wake_pending_   = false;
@@ -1310,41 +860,37 @@ private:
             runtime_->Notify();
     }
 
-    std::string             instance_name_;
-    int                     runtime_index_ = 0;
-    bool                    is_anonymous_  = false;
-    detail::UniflowRuntime* runtime_       = nullptr;
+    std::string instance_name_;
+    Runtime*    runtime_ = nullptr;
 
     // Serialises external StartFlow()/WaitUntilIdle() against pump ExecuteOnce().
-    // Mutable so the const IsIdle() can lock it.
     mutable std::mutex      op_mu_;
-    std::condition_variable idle_cv_; // notified when a flow ends (for WaitUntilIdle)
+    std::condition_variable idle_cv_;
 
     // -- Current position within the running flow --
     bool        flow_running_         = false;
-    const char* curr_step_name_       = nullptr; // step name (for logs)
-    std::string curr_step_description_;          // Describe() value, persists across Stay/Wait
-    int         step_ordinal_         = 0;       // unique steps run so far (Advance-only)
-    int         tick_count_           = 0;       // step body invocations (incl. re-entries)
+    const char* curr_step_name_       = nullptr;
+    std::string curr_step_description_;
+    int         step_ordinal_         = 0;
+    int         tick_count_           = 0;       // total body invocations in flow
+    int         ticks_in_step_        = 0;       // body invocations in current step
     TimePoint   flow_started_at_      = {};
-    Duration    total_cpu_            = {};      // summed pump-thread step time
-    Duration    total_async_          = {};      // summed pool wait time
-    bool        flow_started_pending_ = false;   // defer OnFlowStarted one tick
-    bool        wake_pending_         = false;   // a Wait() delay is in effect
-    TimePoint   wake_at_              = {};      // when the Wait()'d step re-runs
-    FlowOrigin  flow_origin_          = {};      // UF_START_FLOW caller location
+    TimePoint   step_started_at_      = {};      // wall-clock start of current step
+    Duration    total_cpu_            = {};
+    Duration    total_async_          = {};
+    bool        flow_started_pending_ = false;
+    bool        wake_pending_         = false;
+    TimePoint   wake_at_              = {};
+    FlowOrigin  flow_origin_          = {};
 
-    // The current step, held as a callable std::function. The entry step (set by StartFlow)
-    // and every subsequent step (set by Advance from UF_NEXT) live in this
-    // single slot - the pump just invokes curr_fn_() with no arguments.
     std::function<StepResult()> curr_fn_;
 
     // -- Async slot: state of the one in-flight UF_ASYNC submission --
     bool                  async_pending_ = false;
-    bool                  slow_warned_   = false;
+    bool                  slow_warned_   = false;  // OnSlowAsync fired once
     std::future<std::any> pending_fut_;
     const char*           pending_job_label_ = nullptr;
-    AsyncOpts             pending_opts_;
+    Duration              pending_timeout_   = Duration::max();
     TimePoint             pending_submitted_at_;
 
     // -- Last async result - written on completion, read via AsyncResult<T>() --
@@ -1357,57 +903,48 @@ private:
     FlowStats               stats_;
 };
 
-// ----------------------------------------------------------------------
-//  Uniflow<Derived> - out-of-line definitions (need detail::Hub complete)
-// ----------------------------------------------------------------------
+// ----- Uniflow<Derived>: out-of-line definitions -----
 
-// ExecuteOnce advances this module by one tick. The pump calls it round-robin
-// on every non-idle module. One tick does at most one of:
-//   - nothing yet (an async job it waits on has not finished), or
-//   - run exactly one step and act on what that step returned.
-// It never blocks: a not-ready async job makes it return at once.
 template <class Derived>
 bool Uniflow<Derived>::ExecuteOnce(IUniflowObserver& obs, bool force_wake)
 {
-    // One lock for the whole tick, pairing with StartFlow()/Wait()'s lock.
     std::lock_guard<std::mutex> lk(op_mu_);
 
-    // StartFlow() only set a flag; emit OnFlowStarted here so it stays ordered
-    // with the step events the pump thread produces.
     if (flow_started_pending_)
     {
         obs.OnFlowStarted(instance_name_, flow_origin_);
         flow_started_pending_ = false;
     }
     if (!flow_running_)
-        return false; // idle - nothing to do
+        return false;
+
+    const Config& cfg = runtime_->config();
 
     // -- 1. Gate on pending async --
-    // If a previous step submitted async work, do not run the continuation
-    // step until that work finishes (or times out).
     if (async_pending_)
     {
         auto now       = Clock::now();
         auto elapsed   = now - pending_submitted_at_;
-        // wait_for(0) just polls - it never blocks the pump thread.
         bool ready     = pending_fut_.wait_for(std::chrono::seconds(0))
                              == std::future_status::ready;
-        bool timed_out = (elapsed > pending_opts_.timeout);
+        bool timed_out = (elapsed > pending_timeout_);
 
-        // Still running and within deadline: maybe emit a one-time slow
-        // warning, then leave. This return is an implicit Stay.
         if (!ready && !timed_out)
         {
-            if (pending_opts_.slow_warn_after
-                && elapsed > *pending_opts_.slow_warn_after && !slow_warned_)
+            // Slow-async alarm: fire once per job when the in-flight time
+            // first crosses the configured threshold.
+            if (!slow_warned_
+                && cfg.slow_async_threshold != Duration::max()
+                && elapsed > cfg.slow_async_threshold)
             {
-                obs.OnSlowAsync(instance_name_, pending_job_label_, elapsed);
+                obs.OnSlowAsync(instance_name_,
+                                pending_job_label_ ? pending_job_label_ : "",
+                                to_ms(elapsed));
                 slow_warned_ = true;
             }
-            return false; // no step ran - the pump may sleep
+            return false; // still gated; the pump may sleep
         }
 
-        // Ready, or blew its deadline -> move the outcome into the result slot.
         if (timed_out && !ready)
         {
             last_async_value_.reset();
@@ -1417,8 +954,6 @@ bool Uniflow<Derived>::ExecuteOnce(IUniflowObserver& obs, bool force_wake)
         }
         else
         {
-            // future::get() rethrows whatever the worker threw - a throw
-            // becomes a stored exception_ptr, never a pump-thread crash.
             try
             {
                 last_async_value_       = pending_fut_.get();
@@ -1432,17 +967,16 @@ bool Uniflow<Derived>::ExecuteOnce(IUniflowObserver& obs, bool force_wake)
                 last_async_was_timeout_ = false;
             }
         }
-        obs.OnAsyncCompleted(instance_name_, pending_job_label_, elapsed,
+        obs.OnAsyncCompleted(instance_name_, pending_job_label_,
+                             to_ms(elapsed),
                              last_async_exception_ != nullptr,
                              last_async_was_timeout_);
 
-        // Record the wait as its own trace entry - kept separate from step
-        // CPU time so "pump-thread cost" stays honest.
         TraceEntry te;
         te.kind      = TraceEntry::Kind::AsyncCompletion;
         te.ordinal   = step_ordinal_;
         te.name      = pending_job_label_ ? pending_job_label_ : "";
-        te.wait_time = elapsed;
+        te.async_ms  = to_ms(elapsed);
         te.had_error = last_async_exception_ != nullptr;
         te.timed_out = last_async_was_timeout_;
         trace_.push_back(std::move(te));
@@ -1450,47 +984,31 @@ bool Uniflow<Derived>::ExecuteOnce(IUniflowObserver& obs, bool force_wake)
 
         async_pending_ = false;
         slow_warned_   = false;
-        // Slot filled; fall through to run the continuation step.
     }
 
     // -- 1b. Honour a Wait(): hold the step until its delay elapses --
-    //    unless the pump told us an external Notify() happened this round,
-    //    in which case the polling condition might already be true and we
-    //    must give the step a chance to re-evaluate at once.
     if (wake_pending_)
     {
         if (!force_wake && Clock::now() < wake_at_)
-            return false; // not due yet - no step ran, the pump may sleep
+            return false;
         wake_pending_ = false;
     }
 
     // -- 2. Run the step (timed) --
-    // Both the entry step (set by StartFlow) and every steady step (set by
-    // an Advance from UF_NEXT) live in curr_fn_ - no entry/steady split.
-    //
-    // The step body is always called inside a try/catch so we can LOG the
-    // throw through OnStepThrew with the right step ordinal/tick. After
-    // logging, the per-module CatchStepExceptions() policy decides:
-    //   - false (default) -> rethrow, exception propagates out of the pump
-    //                        thread (std::terminate); fail-fast crash.
-    //   - true            -> swallow, end the flow as Fail, pump survives.
     const char* step_name = curr_step_name_;
-    tick_count_++;                          // increment BEFORE the call so
-                                            // OnStepThrew sees the right tick
-    auto        t0        = Clock::now();
+    tick_count_++;
+    ticks_in_step_++;
+    auto        t0    = Clock::now();
     StepResult  r;
-    std::string throw_what;
-    bool        threw     = false;
+    bool        step_had_error = false;
     try
     {
         r = curr_fn_();
     }
     catch (...)
     {
-        // Save the original exception so we can rethrow it intact if the
-        // module opts for fail-fast. The intermediate rethrow_exception is
-        // ONLY to extract what() for the log.
         std::exception_ptr ep = std::current_exception();
+        std::string throw_what;
         try { std::rethrow_exception(ep); }
         catch (const std::exception& e) { throw_what = e.what(); }
         catch (...)                     { throw_what = "(non-std exception)"; }
@@ -1499,110 +1017,106 @@ bool Uniflow<Derived>::ExecuteOnce(IUniflowObserver& obs, bool force_wake)
                         throw_what, step_ordinal_, tick_count_);
 
         if (!static_cast<Derived*>(this)->CatchStepExceptions())
-            std::rethrow_exception(ep);   // fail-fast: pump thread dies here
+            std::rethrow_exception(ep);
 
-        threw = true;
-    }
-    auto cpu_dt = Clock::now() - t0;
-
-    total_cpu_ += cpu_dt;
-
-    if (threw)
-    {
-        // Reached here ONLY when CatchStepExceptions() returned true at
-        // the catch site (otherwise we would have rethrown). OnStepThrew
-        // was already emitted there; here we just record the trace entry
-        // and force-Fail the flow so the module ends cleanly.
-        TraceEntry te;
-        te.kind      = TraceEntry::Kind::StepTransition;
-        te.ordinal   = step_ordinal_;
-        te.name      = step_name ? step_name : "";
-        te.cpu_time  = cpu_dt;
-        te.action    = StepAction::Fail;
-        te.had_error = true;
-        trace_.push_back(std::move(te));
+        step_had_error = true;
         r = StepResult{StepAction::Fail, {}, nullptr, {}};
     }
-    else
+    auto cpu_dt = Clock::now() - t0;
+    total_cpu_ += cpu_dt;
+
+    // Slow-cpu alarm: fire when this single body invocation held the
+    // pump thread for longer than the configured threshold.
+    if (!step_had_error
+        && cfg.slow_cpu_threshold != Duration::max()
+        && cpu_dt > cfg.slow_cpu_threshold)
     {
-        TraceEntry te;
-        te.kind     = TraceEntry::Kind::StepTransition;
-        te.ordinal  = step_ordinal_;
-        te.name     = step_name ? step_name : "";
-        te.cpu_time = cpu_dt;
-        te.action   = r.action;
-        trace_.push_back(std::move(te));
-
-        obs.OnStepRan(instance_name_, step_name ? step_name : "",
-                      curr_step_description_,
-                      step_ordinal_, tick_count_, cpu_dt);
-
-        // A step shares the one pump thread with every other module - if
-        // it overran the threshold, raise the single-thread-protection alarm.
-        if (cpu_dt > detail::Hub::get().config().slow_cpu_threshold)
-            obs.OnSlowCpuStep(instance_name_, step_name ? step_name : "", cpu_dt);
-
-        // If this very step called UF_ASYNC, async_pending_ is now set.
-        if (async_pending_)
-            obs.OnAsyncSubmitted(instance_name_, step_name ? step_name : "",
-                                 pending_job_label_ ? pending_job_label_ : "");
+        obs.OnSlowCpuStep(instance_name_, step_name ? step_name : "",
+                          to_ms(cpu_dt));
     }
 
-    // -- 3. Apply the StepResult --
+    if (!step_had_error && async_pending_)
+        obs.OnAsyncSubmitted(instance_name_, step_name ? step_name : "",
+                             pending_job_label_ ? pending_job_label_ : "");
+
+    // -- 3. Apply the StepResult.
+    //    On step transitions (Advance / Done / Fail) we emit one trace
+    //    entry and OnStepChanged for the step that JUST finished, with
+    //    cumulative ticks_in_step_ and the wall time spent in this step.
+    //    Stay / Wait keep accumulating into the same step. --
     switch (r.action)
     {
     case StepAction::Stay:
-        // Cursor unchanged: curr_fn_ re-runs next tick. Same description.
         break;
     case StepAction::Wait:
-        // Cursor unchanged, but hold the re-run until the delay elapses.
         wake_pending_ = true;
         wake_at_      = Clock::now() + r.delay;
         break;
     case StepAction::Advance:
-        // Entering a NEW step - logical ordinal advances, description resets.
-        curr_fn_        = std::move(r.next_fn);
-        curr_step_name_ = r.next_name;
-        curr_step_description_.clear();
-        step_ordinal_++;
-        break;
     case StepAction::Done:
     case StepAction::Fail:
     {
-        if (r.action == StepAction::Done)
+        auto   transition_at = Clock::now();
+        double step_wall_ms  = to_ms(transition_at - step_started_at_);
+
+        TraceEntry te;
+        te.kind      = TraceEntry::Kind::StepTransition;
+        te.ordinal   = step_ordinal_;
+        te.name      = step_name ? step_name : "";
+        te.ticks     = ticks_in_step_;
+        te.step_ms   = step_wall_ms;
+        te.action    = r.action;
+        te.had_error = step_had_error;
+        trace_.push_back(std::move(te));
+
+        obs.OnStepChanged(instance_name_, step_name ? step_name : "",
+                          curr_step_description_,
+                          step_ordinal_, ticks_in_step_, step_wall_ms);
+
+        if (r.action == StepAction::Advance)
         {
-            stats_.success_count++;
-            stats_.last_success_length = step_ordinal_;
-            if (step_ordinal_ > stats_.max_seen_length)
-                stats_.max_seen_length = step_ordinal_;
+            curr_fn_        = std::move(r.next_fn);
+            curr_step_name_ = r.next_name;
+            curr_step_description_.clear();
+            step_ordinal_++;
+            ticks_in_step_  = 0;
+            step_started_at_ = transition_at;
         }
         else
         {
-            stats_.fail_count++;
+            // Done / Fail - flow ends.
+            if (r.action == StepAction::Done)
+            {
+                stats_.success_count++;
+                stats_.last_success_length = step_ordinal_;
+                if (step_ordinal_ > stats_.max_seen_length)
+                    stats_.max_seen_length = step_ordinal_;
+            }
+            else
+            {
+                stats_.fail_count++;
+            }
+            obs.OnFlowEnded(instance_name_, r.action,
+                            step_ordinal_, tick_count_, trace_,
+                            to_ms(transition_at - flow_started_at_),
+                            to_ms(total_cpu_),
+                            to_ms(total_async_),
+                            stats_, flow_origin_);
+            ClearFlow();
+            idle_cv_.notify_all();
         }
-        obs.OnFlowEnded(instance_name_, r.action,
-                        step_ordinal_, tick_count_, trace_,
-                        Clock::now() - flow_started_at_, total_cpu_,
-                        total_async_, stats_, flow_origin_);
-        ClearFlow();
-        idle_cv_.notify_all(); // wake any WaitUntilIdle()
         break;
     }
     }
-    return true; // a real step ran this tick
+    return true;
 }
 
-// SubmitAsync hands a job to a thread pool and arms the async slot. `Fn` is a
-// non-type template parameter - the actual function baked in at compile time,
-// so the worker lambda calls it with zero indirection. UF_ASYNC fills it in.
+// SubmitAsync hands a job to the Runtime's executor and arms the async slot.
 template <class Derived>
 template <auto Fn, class... Args>
-void Uniflow<Derived>::SubmitAsync(const char* job_label, AsyncOpts opts,
+void Uniflow<Derived>::SubmitAsync(const char* job_label, Duration timeout,
                                    Args&&... args)
 {
-    // Compile-time safety gate: the target must NOT be a non-static member
-    // function. A worker on another thread must never touch `this` -
-    // everything it needs is passed explicitly through args.
     static_assert(!std::is_member_function_pointer_v<decltype(Fn)>,
                   "UF_ASYNC target must be a `static` member or free function. "
                   "Instance state is unsafe across threads - pass needed data "
@@ -1610,25 +1124,17 @@ void Uniflow<Derived>::SubmitAsync(const char* job_label, AsyncOpts opts,
 
     using R = std::invoke_result_t<decltype(Fn), Args...>;
 
-    // promise/future is the one-shot channel from the worker back to the pump.
     auto promise          = std::make_shared<std::promise<std::any>>();
     pending_fut_          = promise->get_future();
     pending_job_label_    = job_label;
-    pending_opts_         = std::move(opts);
+    pending_timeout_      = timeout;
     pending_submitted_at_ = Clock::now();
     async_pending_        = true;
-    slow_warned_          = false;
 
-    // Decay-copy the args into a value tuple - the worker can never reach
-    // back into `this` even if the caller passed a member reference.
     auto tup = std::tuple<std::decay_t<Args>...>(std::forward<Args>(args)...);
+    Runtime* rt = runtime_;
 
-    // Capture the runtime pointer so the worker can wake the pump as soon
-    // as the result is set. Without this, the pump would only observe the
-    // ready future on its next idle_sleep tick.
-    detail::UniflowRuntime* rt = runtime_;
-
-    detail::Hub::get().executor(pending_opts_.executor_name).Submit(
+    runtime_->executor().Submit(
         [promise, tup = std::move(tup), rt]() mutable
         {
             try
@@ -1651,30 +1157,17 @@ void Uniflow<Derived>::SubmitAsync(const char* job_label, AsyncOpts opts,
             }
             catch (...)
             {
-                // Captured here, rethrown by future::get() on the pump thread.
                 promise->set_exception(std::current_exception());
             }
-            // Worker is done - either set_value or set_exception ran. Wake
-            // the pump so it observes the ready future at once, not on the
-            // next idle_sleep tick.
             if (rt) rt->Notify();
         });
 }
 
 } // namespace uniflow
 
-// ----------------------------------------------------------------------
-//  Convenience macros
-//
-//  Place UF_USES_UNIFLOW(MyClass) - or UF_SINGLETON(MyClass) - once at the top
-//  of the class body. Both leave the class in a `private:` section, so add
-//  `public:` before your entry steps. The macros capture, for every step /
-//  worker function, both `&S::fn` (the pointer) and `#fn` (its name string) -
-//  which is why step names appear in logs with no manual logging in your code.
-// ----------------------------------------------------------------------
+// Convenience macros. UF_USES_UNIFLOW captures &S::fn + #fn for every step
+// so names show up in logs without manual logging.
 
-// For a module that may have several instances. Inherits the base constructors
-// (so `MyClass m{"name"}` works) and grants the base template friendship.
 #define UF_USES_UNIFLOW(Cls)                                                  \
   public:                                                                     \
     using uniflow::Uniflow<Cls>::Uniflow;                                     \
@@ -1684,60 +1177,30 @@ void Uniflow<Derived>::SubmitAsync(const char* job_label, AsyncOpts opts,
     friend class ::uniflow::Uniflow<Cls>;                                     \
     static const char* uf_class_name_() { return #Cls; }
 
-// For a single-instance module. Provides Cls::inst() and makes the class
-// non-constructible elsewhere (the default constructor is private), so a
-// stray second instance is a compile error rather than a runtime throw.
-#define UF_SINGLETON(Cls)                                                     \
-  public:                                                                     \
-    static Cls& inst()                                                        \
-    {                                                                         \
-        static Cls the_instance_;                                             \
-        return the_instance_;                                                 \
-    }                                                                         \
-                                                                              \
-  private:                                                                    \
-    Cls() = default;                                                          \
-    using S = Cls;                                                            \
-    friend class ::uniflow::Uniflow<Cls>;                                     \
-    static const char* uf_class_name_() { return #Cls; }
-
-// Advance to step `fn`, optionally passing arguments through. With no extra
-// arguments it behaves like the original UF_NEXT(fn); with arguments, those
-// values are captured by the next step fn and delivered to fn when the pump
-// invokes it. The `, ##__VA_ARGS__` GNU comma-elision form drops the leading
-// comma when nothing follows fn (GCC, Clang, and MSVC's preprocessor honour
-// it - same idiom UF_ASYNC already uses).
+// Advance to step `fn`, optionally passing arguments through.
 #define UF_NEXT(fn, ...) \
     this->template Next_<&S::fn>(#fn, ##__VA_ARGS__)
 
-// Submit static function `fn` to the "default" pool with default options.
-// `, ##__VA_ARGS__` is the GNU comma-elision form: the leading comma is
-// dropped when no extra args are passed. GCC, Clang, and the MSVC
-// preprocessor all honour it - no special compiler flag needed.
+// Submit static function `fn` to the Runtime's executor with no deadline.
 #define UF_ASYNC(fn, ...)                                                     \
-    this->template SubmitAsync<&S::fn>(#fn, ::uniflow::AsyncOpts{},           \
+    this->template SubmitAsync<&S::fn>(#fn, ::uniflow::Duration::max(),       \
                                        ##__VA_ARGS__)
+
+// Same as UF_ASYNC but with a timeout. `dur` is a uniflow::Duration
+// (chrono::duration of any unit; the chrono literals 1ms / 1s also work).
+#define UF_ASYNC_TIMEOUT(fn, dur, ...)                                        \
+    this->template SubmitAsync<&S::fn>(#fn, (dur), ##__VA_ARGS__)
 
 // Launch a flow on `mod` at entry step `fn`, recording the caller's source
 // location so log lines and "who started this flow?" debugging is trivial.
-// `mod` may be any reference to a Uniflow<Derived> instance (Stage::inst(),
-// LoadPicker::GetInst("LoadPicker"), a local module variable, ...). The
-// macro picks the Derived type via decltype, so no manual class name needed.
 //
-// Equivalent to `mod.StartFlow(&Derived::fn, args...)` plus origin capture.
-// Returns the same bool StartFlow returns (false if a flow is already running).
-//
-//   UF_START_FLOW(Stage::inst(), OnProcess_Begin);
+//   UF_START_FLOW(app.stage, OnProcess_Begin);
 //   UF_START_FLOW(my_router, OnRoute_Begin, message, 42);
 #define UF_START_FLOW(mod, fn, ...)                                           \
     ((mod).StartFlowAt(                                                       \
         __FILE__, __LINE__,                                                   \
         &std::remove_reference_t<decltype(mod)>::fn,                          \
         ##__VA_ARGS__))
-
-// Same as UF_ASYNC but with an explicit AsyncOpts (timeout / pool / warn).
-#define UF_ASYNC_OPT(fn, opts, ...)                                           \
-    this->template SubmitAsync<&S::fn>(#fn, (opts), ##__VA_ARGS__)
 
 // ======================================================================
 //  BS::thread_pool - bundled in-place (was a separate header).
@@ -2906,27 +2369,34 @@ private:
 }; // class thread_pool
 } // namespace BS
 
-// ======================================================================
-//  BSThreadPoolExecutor - uniflow IExecutor adapter over BS::thread_pool.
-//  Defined here so the complete BS::thread_pool type is visible as a member.
-// ======================================================================
+// Default executor: BSThreadPoolExecutor wrapping BS::thread_pool, in
+// uniflow::detail so user code never names it.
 namespace uniflow
+{
+namespace detail
 {
 
 class BSThreadPoolExecutor : public IExecutor
 {
 public:
-    explicit BSThreadPoolExecutor(std::size_t threads = 0)
-        : pool_(threads ? threads : std::thread::hardware_concurrency()) {}
+    explicit BSThreadPoolExecutor(std::size_t threads)
+        : pool_(static_cast<BS::concurrency_t>(
+              threads ? threads : std::thread::hardware_concurrency())) {}
 
     void Submit(std::function<void()> task) override
     {
         pool_.detach_task(std::move(task));
     }
-    size_t QueueDepth() const override { return pool_.get_tasks_queued(); }
+    std::size_t QueueDepth() const override { return pool_.get_tasks_queued(); }
 
 private:
     BS::thread_pool pool_;
 };
 
+inline std::unique_ptr<IExecutor> make_default_executor(std::size_t threads)
+{
+    return std::make_unique<BSThreadPoolExecutor>(threads);
+}
+
+} // namespace detail
 } // namespace uniflow

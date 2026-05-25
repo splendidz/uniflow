@@ -1,6 +1,3 @@
-// ======================================================================
-//  env_log_observer.cpp - implementation of the wide-column logger.
-// ======================================================================
 #include "env_log_observer.h"
 
 #include <fstream>
@@ -22,12 +19,12 @@ namespace {
         os << std::setw(2) << std::setfill('0') << v;
         return os.str();
     }
-    std::string FmtMs(uniflow::Duration d)
+    std::string FmtMs(double ms)
     {
         std::ostringstream os;
         os.setf(std::ios::fixed);
         os.precision(2);
-        os << uniflow::to_ms(d) << "ms";
+        os << ms << "ms";
         return os.str();
     }
 }
@@ -46,16 +43,17 @@ void EnvLogObserver::OnFlowStarted(std::string_view obj,
     Emit(obj, os.str());
 }
 
-void EnvLogObserver::OnStepRan(std::string_view obj, std::string_view step,
-                               std::string_view description,
-                               int step_ordinal, int tick,
-                               uniflow::Duration elapsed_cpu)
+void EnvLogObserver::OnStepChanged(std::string_view obj, std::string_view step,
+                                   std::string_view description,
+                                   int step_ordinal, int ticks_in_step,
+                                   double elapsed_ms)
 {
     std::ostringstream os;
     os << Pad(step, kColStep) << " "
        << Pad(description, kColDesc) << " "
-       << "#" << Pad2(step_ordinal) << "/#" << Pad2(tick)
-       << " elapsed=" << FmtMs(elapsed_cpu);
+       << "#" << Pad2(step_ordinal)
+       << " ticks=" << Pad2(ticks_in_step)
+       << " elapsed=" << FmtMs(elapsed_ms);
     Emit(obj, os.str());
 }
 
@@ -80,34 +78,34 @@ void EnvLogObserver::OnAsyncSubmitted(std::string_view obj, std::string_view ste
 }
 
 void EnvLogObserver::OnAsyncCompleted(std::string_view obj, std::string_view job,
-                                      uniflow::Duration wait,
+                                      double wait_ms,
                                       bool had_error, bool timed_out)
 {
     std::ostringstream os;
     os << Pad("", kColStep) << " "
        << "ASYNC DONE    " << job
-       << "  wait=" << FmtMs(wait);
+       << "  wait=" << FmtMs(wait_ms);
     if (timed_out)      os << "  [TIMEOUT]";
     else if (had_error) os << "  [ERROR]";
     Emit(obj, os.str());
 }
 
 void EnvLogObserver::OnSlowCpuStep(std::string_view obj, std::string_view step,
-                                   uniflow::Duration cpu)
+                                   double cpu_ms)
 {
     std::ostringstream os;
     os << Pad(step, kColStep) << " "
-       << "[SLOW CPU]  held pump for " << FmtMs(cpu);
+       << "[SLOW CPU]  held pump for " << FmtMs(cpu_ms);
     Emit(obj, os.str());
 }
 
 void EnvLogObserver::OnSlowAsync(std::string_view obj, std::string_view job,
-                                 uniflow::Duration wait_so_far)
+                                 double wait_so_far_ms)
 {
     std::ostringstream os;
     os << Pad("", kColStep) << " "
        << "[SLOW ASYNC]  " << job
-       << "  pending=" << FmtMs(wait_so_far);
+       << "  pending=" << FmtMs(wait_so_far_ms);
     Emit(obj, os.str());
 }
 
@@ -115,23 +113,20 @@ void EnvLogObserver::OnFlowEnded(std::string_view obj,
                                  uniflow::StepAction terminal_action,
                                  int final_step_ordinal, int total_ticks,
                                  const std::vector<uniflow::TraceEntry>&,
-                                 uniflow::Duration wall_clock,
-                                 uniflow::Duration total_cpu,
-                                 uniflow::Duration total_async_wait,
+                                 double wall_ms,
+                                 double total_step_ms,
+                                 double total_async_ms,
                                  const uniflow::FlowStats&,
                                  uniflow::FlowOrigin origin)
 {
     std::ostringstream os;
-    // `wall`  = flow's start-to-end wall clock.
-    // `cpu`   = summed pump-thread time across every step body call.
-    // `async` = summed time the flow spent gated on async jobs.
     os << "FLOW "
        << (terminal_action == uniflow::StepAction::Done ? "END  DONE" : "END  FAIL")
        << "  steps=#" << Pad2(final_step_ordinal)
        << " ticks=#" << Pad2(total_ticks)
-       << "  wall=" << FmtMs(wall_clock)
-       << "  cpu=" << FmtMs(total_cpu)
-       << "  async=" << FmtMs(total_async_wait);
+       << "  wall=" << FmtMs(wall_ms)
+       << "  step=" << FmtMs(total_step_ms)
+       << "  async=" << FmtMs(total_async_ms);
     if (origin.file)
         os << "  caller=" << origin.file << ":" << origin.line;
     Emit(obj, os.str());

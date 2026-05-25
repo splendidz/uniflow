@@ -1,13 +1,8 @@
-// ======================================================================
-//  viz.cpp - Win32 window on Windows, console animation elsewhere.
-//
-//  Defines RunVisualisation() declared in viz.h. The pump-side Viz
-//  module fills g_snap every tick; we just render it here.
-//
-//  Define UNIFLOW_CONSOLE_VIZ to force the console backend on Windows.
-// ======================================================================
+// viz.cpp - Win32 / console renderer. Define UNIFLOW_CONSOLE_VIZ on
+// Windows to force the console backend.
 #include "viz.h"
 
+#include "app.h"
 #include "globals.h"
 #include "load_picker.h"
 #include "snapshot.h"
@@ -23,8 +18,6 @@
 
 using namespace std::chrono_literals;
 
-// ----- Viz step bodies -------------------------------------------------
-
 Viz::StepResult Viz::OnViz_Begin()
 {
     return UF_NEXT(OnViz_Tick);
@@ -34,9 +27,9 @@ Viz::StepResult Viz::OnViz_Tick()
 {
     if (GlobalEnv::Stop())
         return Done();
-    const auto& load   = LoadPicker::GetInst();
-    const auto& unload = UnloadPicker::GetInst();
-    const auto& stage  = Stage::inst();
+    const auto& load   = App::inst().load;
+    const auto& unload = App::inst().unload;
+    const auto& stage  = App::inst().stage;
     {
         std::lock_guard<std::mutex> lk(g_snap_mu);
         g_snap.load_x_mm            = load.X_mm();
@@ -59,8 +52,6 @@ Viz::StepResult Viz::OnViz_Tick()
     return Wait(GlobalTiming::kVizTick);
 }
 
-// ----- Rendering -------------------------------------------------------
-
 #if defined(_WIN32) && !defined(UNIFLOW_CONSOLE_VIZ)
 #define UNIFLOW_WIN32_VIZ 1
 #else
@@ -72,15 +63,10 @@ Viz::StepResult Viz::OnViz_Tick()
 #define NOMINMAX
 #include <windows.h>
 
-// World-to-pixel mapping.
-//   X: 0..kXMax_mm  -> 60..920 (860 px)        ~ 0.614 px/mm
-//   Z: 0..kZDown_mm -> 96..306 (210 px)        ~ 1.75  px/mm
-// Finger gap uses its own scale: small mm range, want ~12-18 px half-gap.
 static int SX(double x) { return 60 + static_cast<int>(x / GlobalGeometry::kXMax_mm * 860.0); }
 static int SZ(double z) { return 96 + static_cast<int>(z / GlobalGeometry::kZDown_mm * 210.0); }
 
-// Pixels per mm for the gripper drawing (visual only, independent of SX/SZ).
-static constexpr double kFingerPxPerMm = 1.5;
+static constexpr double kFingerPxPerMm = 1.5;  // gripper-only px/mm
 static int FingerPx(double mm) { return static_cast<int>(mm * kFingerPxPerMm); }
 
 static void DrawScene(HDC hdc, const RECT& rc)
@@ -148,13 +134,8 @@ static void DrawScene(HDC hdc, const RECT& rc)
         DeleteObject(b);
     }
 
-    // ----- picker drawer with two-finger gripper -----
-    //   arm:     thick vertical line from rail down to gripper base
-    //   fingers: two short vertical bars hung off the base, separated
-    //            by finger_gap_mm (0 = closed, kFingerOpen_mm = open)
-    //   part:    drawn between the fingers when carrying; on a closed
-    //            empty gripper the fingers visually touch ("closed on
-    //            nothing"), which is correct during grip transitions.
+    // picker = arm + base block + two fingers (gap_mm), part drawn
+    // between fingers when carrying.
     auto picker = [&](double px, double pz, bool carry, double gap_mm,
                       int rail_y, COLORREF arm_color, const char* tag,
                       const std::string& phase)
@@ -268,7 +249,7 @@ void RunVisualisation()
     wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
     RegisterClassA(&wc);
 
-    HWND hwnd = CreateWindowA(cls, "uniflow - CNC pickers",
+    HWND hwnd = CreateWindowA(cls, "cnc_pickers",
                               WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME,
                               CW_USEDEFAULT, CW_USEDEFAULT, 1000, 470,
                               nullptr, nullptr, wc.hInstance, nullptr);

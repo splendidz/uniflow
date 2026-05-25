@@ -1,7 +1,6 @@
-// ======================================================================
-//  globals.cpp - definitions for the helpers declared in globals.h.
-// ======================================================================
 #include "globals.h"
+
+#include "app.h"
 
 #include <chrono>
 #include <cmath>
@@ -27,9 +26,7 @@ bool GlobalEnv::ZoneAHasPart() { return g_zone_a_part; }
 void GlobalEnv::CreateFakeZoneAPart()
 {
     g_zone_a_part = true;
-    // Wake the Orchestrator so TryStartLoadPicker runs without waiting
-    // out the next kSchedTick.
-    uniflow::NotifyAll();
+    App::inst().rt.Notify();   // wake Orchestrator without waiting kSchedTick
 }
 void GlobalEnv::ConsumeZoneAPart() { g_zone_a_part = false; }
 
@@ -55,9 +52,8 @@ void HwSimulator::DoReady()
         int ms = d(rng);
         std::this_thread::sleep_for(std::chrono::milliseconds(ms));
         g_hw_ready.store(true, std::memory_order_release);
-        // Intentionally NO uniflow::NotifyAll() here: real machining HW
-        // would not know "uniflow" exists. Stage polls IsReady() at its
-        // own cadence; that polling floor is the upper bound on latency.
+        // No Notify() here on purpose: real HW would not know about uniflow.
+        // Stage polls IsReady() at its own cadence.
     }).detach();
 }
 bool HwSimulator::IsReady()

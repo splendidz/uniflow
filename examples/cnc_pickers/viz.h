@@ -1,23 +1,18 @@
-// ======================================================================
-//  viz.h - Viz module + the visualisation main loop entry point.
-//
-//  Viz is a uniflow singleton that snapshots the whole line state into
-//  g_snap every kVizTick; the rendering loop (Win32 window on Windows,
-//  console animation elsewhere) runs on the main thread and reads
-//  through ReadSnapshot().
-//
-//  Step bodies and RunVisualisation()/Win32 paint code live in viz.cpp
-//  so <windows.h> does not leak into any other translation unit.
-// ======================================================================
+// viz.h - snapshots line state into g_snap every kVizTick.
+// RunVisualisation() (Win32 or console) renders on the main thread.
+// <windows.h> is confined to viz.cpp.
 #pragma once
 
 #include "globals.h"
 
 class Viz : public uniflow::Uniflow<Viz>
 {
-    UF_SINGLETON(Viz);
+    UF_USES_UNIFLOW(Viz);
 
 public:
+    explicit Viz(uniflow::Runtime& rt)
+        : uniflow::Uniflow<Viz>(rt) {}
+
     StepResult OnViz_Begin();
 
 private:

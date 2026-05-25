@@ -1,20 +1,5 @@
-// ======================================================================
-//  env_log_observer.h - mirrors flow events to console + a log file in
-//  fixed-column layout that scans well on a wide monitor.
-//
-//  Column widths are tuned for ~120 chars terminal. Adjust kColXxx below
-//  if the project's typical screen is narrower or you want more
-//  description.
-//
-//  Column layout (STEP rows):
-//    [ obj          ] step                       description                   #s/#t elapsed
-//    [ Stage        ] OnProcess_WaitHwReady      hw ready handshake settling   #04/#23 elapsed=0.02ms
-//
-//  The file is opened/closed on every emission. Slow, but never loses a
-//  line on a crash. Time cost was explicitly OK for this sim.
-//
-//  Definitions live in env_log_observer.cpp.
-// ======================================================================
+// env_log_observer.h - fixed-column logger to stdout + appended log file.
+// File is opened/closed per line so a crash never loses output.
 #pragma once
 
 #include "uniflow.hpp"
@@ -35,29 +20,29 @@ public:
 
     void OnFlowStarted(std::string_view obj,
                        uniflow::FlowOrigin origin) override;
-    void OnStepRan(std::string_view obj, std::string_view step,
-                   std::string_view description,
-                   int step_ordinal, int tick,
-                   uniflow::Duration elapsed_cpu) override;
+    void OnStepChanged(std::string_view obj, std::string_view step,
+                       std::string_view description,
+                       int step_ordinal, int ticks_in_step,
+                       double elapsed_ms) override;
     void OnStepThrew(std::string_view obj, std::string_view step,
                      std::string_view what,
                      int step_ordinal, int tick) override;
     void OnAsyncSubmitted(std::string_view obj, std::string_view step,
                           std::string_view job) override;
     void OnAsyncCompleted(std::string_view obj, std::string_view job,
-                          uniflow::Duration wait,
+                          double wait_ms,
                           bool had_error, bool timed_out) override;
     void OnSlowCpuStep(std::string_view obj, std::string_view step,
-                       uniflow::Duration cpu) override;
+                       double cpu_ms) override;
     void OnSlowAsync(std::string_view obj, std::string_view job,
-                     uniflow::Duration wait_so_far) override;
+                     double wait_so_far_ms) override;
     void OnFlowEnded(std::string_view obj,
                      uniflow::StepAction terminal_action,
                      int final_step_ordinal, int total_ticks,
                      const std::vector<uniflow::TraceEntry>&,
-                     uniflow::Duration wall_clock,
-                     uniflow::Duration total_cpu,
-                     uniflow::Duration total_async_wait,
+                     double wall_ms,
+                     double total_step_ms,
+                     double total_async_ms,
                      const uniflow::FlowStats&,
                      uniflow::FlowOrigin origin) override;
 

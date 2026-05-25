@@ -1,10 +1,5 @@
-// ======================================================================
-//  snapshot.h - the one cross-thread hand-off (pump -> UI thread).
-//
-//  Viz fills g_snap under g_snap_mu every kVizTick; the UI/render thread
-//  calls ReadSnapshot() to get a consistent copy. No other lock crosses
-//  the pump/UI boundary in this example.
-// ======================================================================
+// snapshot.h - pump -> UI hand-off. Viz writes g_snap under g_snap_mu;
+// the render thread reads via ReadSnapshot(). Only cross-thread lock here.
 #pragma once
 
 #include "globals.h"

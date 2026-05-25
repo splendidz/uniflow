@@ -1,6 +1,3 @@
-// ======================================================================
-//  stage.cpp - Stage flow steps and HW handshake workers.
-// ======================================================================
 #include "stage.h"
 
 #include <chrono>
@@ -11,16 +8,14 @@ void Stage::OnRawPartReceived()
 {
     state_ = StageState::RawPartLoaded;
     Describe("raw part loaded");
-    // Wake the Orchestrator so TryStartStageProcessing runs without
-    // waiting out the next kSchedTick.
-    uniflow::NotifyAll();
+    NotifyRuntime();
 }
 
 void Stage::OnProcessedPartTaken()
 {
     state_ = StageState::Idle;
     Describe("empty");
-    uniflow::NotifyAll();
+    NotifyRuntime();
 }
 
 Stage::StepResult Stage::OnProcess_Begin()
@@ -75,10 +70,8 @@ Stage::StepResult Stage::OnProcess_WaitHwReady(uniflow::UFTimer& t)
 Stage::StepResult Stage::OnProcess_Run(uniflow::UFTimer& t)
 {
     if (GlobalEnv::Stop()) return Done();
-    // Stay() / Wait() re-enter THIS step fn: by-ref signature means we
-    // touch the SAME UFTimer instance stored in the next-step capture
-    // tuple every time, so Elapsed() keeps growing from the moment the
-    // step was first armed.
+    // by-ref param: Stay/Wait re-enter touches the SAME timer in the next-step
+    // capture, so Elapsed() keeps growing from initial arming.
     auto   elapsed = t.Elapsed();
     double frac =
         std::chrono::duration<double>(elapsed).count()
@@ -128,8 +121,7 @@ Stage::StepResult Stage::OnProcess_ReturnToPickPos()
 
     state_ = StageState::ProcessedPartReady;
     Describe("ready to hand off");
-    // Wake the Orchestrator so TryStartUnloadPicker runs immediately.
-    uniflow::NotifyAll();
+    NotifyRuntime();
     return Done();
 }
 

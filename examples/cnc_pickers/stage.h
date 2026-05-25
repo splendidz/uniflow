@@ -1,37 +1,18 @@
-// ======================================================================
-//  stage.h - the machining cell at zone B. Single instance.
-//
-//  Lifecycle is a sequence of flows started by the Orchestrator. One
-//  flow == one part processed. The flow runs:
-//
-//    SendStartHwCommand (async, ~1 s)
-//    WaitHwReady        (poll, ~1 s)
-//    Processing         (~5 s, time-based)
-//    SendCleanupCommand (async, ~0.5 s)
-//    MoveToPickPos                 - retract table, InPosition wait
-//    -> Done; state becomes ProcessedPartReady
-//
-//  Pickers call ReadyToReceiveRawPart / ReadyToHandOffProcessedPart and
-//  never touch the Stage's internal phase.
-//
-//  Step bodies are defined in stage.cpp.
-// ======================================================================
+// stage.h - machining cell at zone B. One flow per part:
+//   SendStart (async) -> WaitHwReady -> Processing -> SendCleanup (async)
+//   -> MoveToPickPos -> Done, state=ProcessedPartReady.
 #pragma once
 
 #include "globals.h"
 
 class Stage : public uniflow::Uniflow<Stage>
 {
-    UF_SINGLETON(Stage);
-    //
-    // === SINGLE INSTANCE: exactly one Stage cell at zone B. ===
-    //
-    // UF_SINGLETON above is not boilerplate - it encodes a hardware
-    // assumption. A second instance would be a logic error and the macro
-    // prevents it at compile time.
-    //
+    UF_USES_UNIFLOW(Stage);
 
 public:
+    explicit Stage(uniflow::Runtime& rt)
+        : uniflow::Uniflow<Stage>(rt) {}
+
     StageState  state()      const { return state_; }
     double      TableX_mm()  const { return table_x_axis_.Position(); }
     double      TableY_mm()  const { return table_y_offset_mm_; }

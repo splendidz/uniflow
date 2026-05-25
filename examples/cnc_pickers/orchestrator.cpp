@@ -1,13 +1,6 @@
-// ======================================================================
-//  orchestrator.cpp - scheduling step + Try* triggers.
-//
-//  Try* are called every kSchedTick (backstop) AND every time a state
-//  mutator elsewhere calls uniflow::NotifyAll() (event path). The body
-//  itself stays oblivious to which path woke it; it just re-evaluates
-//  every precondition and acts on whatever now passes.
-// ======================================================================
 #include "orchestrator.h"
 
+#include "app.h"
 #include "load_picker.h"
 #include "stage.h"
 #include "unload_picker.h"
@@ -23,13 +16,8 @@ Orchestrator::StepResult Orchestrator::OnSchedule_Tick()
     if (GlobalEnv::Stop())
         return Done();
 
-    // Time-driven (only this one needs the poll cadence to fire):
-    TryCreateFakeRawPart();
-
-    // Event-driven (woken by NotifyAll() in the relevant mutators;
-    // re-evaluated here on every tick path too, so the poll backstop
-    // covers any missed wake):
-    TryStartLoadPicker();
+    TryCreateFakeRawPart();        // time-driven
+    TryStartLoadPicker();          // event-driven (poll = backstop)
     TryStartStageProcessing();
     TryStartUnloadPicker();
 
@@ -51,35 +39,29 @@ void Orchestrator::TryCreateFakeRawPart()
 {
     if (GlobalEnv::ZoneAHasPart())                 return;
     if (uniflow::Clock::now() < next_spawn_at_)    return;
-    // CreateFakeZoneAPart() itself calls NotifyAll() so TryStartLoadPicker
-    // on the next tick (which is "right now" - we run it below) sees the
-    // new part without waiting kSchedTick.
     GlobalEnv::CreateFakeZoneAPart();
     ScheduleNextLoaderCreate();
 }
 
 void Orchestrator::TryStartLoadPicker()
 {
-    auto& picker = LoadPicker::GetInst();
+    auto& picker = App::inst().load;
     if (!picker.IsIdle())              return;
     if (!GlobalEnv::ZoneAHasPart())    return;
-    // Launch even if Stage is not yet Idle - the picker will park at
-    // the B-zone boundary. This is the "prefetch" behaviour.
+    // Prefetch: launch even while Stage isn't Idle - picker parks at the
+    // A-side gap.
     UF_START_FLOW(picker, OnLoad_Begin);
 }
 
 void Orchestrator::TryStartUnloadPicker()
 {
-    auto& picker = UnloadPicker::GetInst();
+    auto& picker = App::inst().unload;
     if (!picker.IsIdle()) return;
 
-    // Prefetch as early as a part is on its way to Stage so the picker
-    // creeps to the B-safety gap in parallel with the LoadPicker's
-    // approach, instead of standing idle at C until Stage transitions:
-    //   - Stage already has a part loaded / processing / ready
-    //   - OR LoadPicker is currently carrying one toward B
-    auto& loader = LoadPicker::GetInst();
-    auto  st     = Stage::inst().state();
+    // Prefetch as soon as a part is incoming so the unload picker is
+    // already hovering above B when Stage hands off.
+    auto& loader = App::inst().load;
+    auto  st     = App::inst().stage.state();
     bool  stage_has_part_incoming =
         st == StageState::RawPartLoaded
      || st == StageState::Processing
@@ -92,7 +74,7 @@ void Orchestrator::TryStartUnloadPicker()
 
 void Orchestrator::TryStartStageProcessing()
 {
-    auto& stage = Stage::inst();
+    auto& stage = App::inst().stage;
     if (!stage.IsIdle())                              return;
     if (stage.state() != StageState::RawPartLoaded)   return;
     UF_START_FLOW(stage, OnProcess_Begin);

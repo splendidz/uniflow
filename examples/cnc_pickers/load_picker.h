@@ -1,19 +1,6 @@
-// ======================================================================
-//  load_picker.h - carries a raw part A -> B.
-//
-//  One flow == one A->B->A round trip. The Orchestrator launches this
-//  picker when zone A has a part and the picker is Idle. The picker
-//  itself decides to park at the B-safety-gap boundary if Stage is not
-//  yet ready to receive (gives the "prefetch + wait" behaviour).
-//
-//  Step pattern: each motion is split into a "command" step (issues
-//  SetTarget, advances immediately) and a "wait at" step (polls
-//  InPosition with Stay() for fastest possible response). Gripper grip
-//  / release is also axis-driven: SetTarget on finger_axis_, Stay()
-//  while the fingers traverse, advance on InPosition.
-//
-//  Step bodies are defined in load_picker.cpp.
-// ======================================================================
+// load_picker.h - carries a raw part A -> B. One flow per round trip.
+// Motion pattern: "Cmd" step issues SetTarget and Advances; "WaitAt"
+// step polls InPosition with Stay(). Gripper is axis-driven the same way.
 #pragma once
 
 #include "globals.h"
@@ -25,7 +12,9 @@ class LoadPicker : public uniflow::Uniflow<LoadPicker>,
     UF_USES_UNIFLOW(LoadPicker);
 
 public:
-    LoadPicker();
+    explicit LoadPicker(uniflow::Runtime& rt)
+        : uniflow::Uniflow<LoadPicker>(rt),
+          PickerMotion(GlobalGeometry::kZoneA_mm) {}
 
     StepResult OnLoad_Begin();
 
