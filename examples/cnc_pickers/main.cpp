@@ -1,8 +1,8 @@
-// cnc_pickers - CNC line demo. LoadPicker A->B, Stage processes at B,
-// UnloadPicker B->C. Pickers can never share zone B. All modules live
-// as members of App (app.h); Orchestrator schedules.
+// cnc_pickers - CNC line demo. UF_LoadPicker A->B, UF_Stage processes at B,
+// UF_UnloadPicker B->C. Pickers can never share zone B. All modules live
+// as members of App (app.h); UF_Orchestrator schedules.
 #include "app.h"
-#include "viz.h"
+#include "uf_visualization.h"
 
 #include <iostream>
 

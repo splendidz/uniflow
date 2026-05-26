@@ -5,13 +5,13 @@
 
 #include "globals.h"
 
-class Stage : public uniflow::Uniflow<Stage>
+class UF_Stage : public uniflow::Uniflow<UF_Stage>
 {
-    UF_UNIFLOW_IMPLEMENT(Stage);
+    UF_UNIFLOW_IMPLEMENT(UF_Stage);
 
 public:
-    explicit Stage(uniflow::Runtime& rt)
-        : uniflow::Uniflow<Stage>(rt) {}
+    explicit UF_Stage(uniflow::Runtime& rt)
+        : uniflow::Uniflow<UF_Stage>(rt) {}
 
     StageState  state()      const { return state_; }
     double      TableX_mm()  const { return table_x_axis_.Position(); }

@@ -13,6 +13,9 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="Uniflow Classes">
+      <UniqueIdentifier>{947b17d9-3a05-4485-9536-1b316f44b9cf}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp">
@@ -27,23 +30,23 @@
     <ClCompile Include="picker_motion.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
-    <ClCompile Include="stage.cpp">
-      <Filter>소스 파일</Filter>
-    </ClCompile>
-    <ClCompile Include="load_picker.cpp">
-      <Filter>소스 파일</Filter>
-    </ClCompile>
-    <ClCompile Include="unload_picker.cpp">
-      <Filter>소스 파일</Filter>
-    </ClCompile>
-    <ClCompile Include="orchestrator.cpp">
+    <ClCompile Include="uf_stage.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
     <ClCompile Include="env_log_observer.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
-    <ClCompile Include="viz.cpp">
-      <Filter>소스 파일</Filter>
+    <ClCompile Include="uf_load_picker.cpp">
+      <Filter>Uniflow Classes</Filter>
+    </ClCompile>
+    <ClCompile Include="uf_orchestrator.cpp">
+      <Filter>Uniflow Classes</Filter>
+    </ClCompile>
+    <ClCompile Include="uf_unload_picker.cpp">
+      <Filter>Uniflow Classes</Filter>
+    </ClCompile>
+    <ClCompile Include="uf_visualization.cpp">
+      <Filter>Uniflow Classes</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -59,22 +62,25 @@
     <ClInclude Include="picker_motion.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
-    <ClInclude Include="stage.h">
-      <Filter>헤더 파일</Filter>
-    </ClInclude>
-    <ClInclude Include="load_picker.h">
-      <Filter>헤더 파일</Filter>
-    </ClInclude>
-    <ClInclude Include="unload_picker.h">
-      <Filter>헤더 파일</Filter>
-    </ClInclude>
-    <ClInclude Include="orchestrator.h">
-      <Filter>헤더 파일</Filter>
-    </ClInclude>
     <ClInclude Include="env_log_observer.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
-    <ClInclude Include="viz.h">
+    <ClInclude Include="uf_visualization.h">
+      <Filter>Uniflow Classes</Filter>
+    </ClInclude>
+    <ClInclude Include="uf_load_picker.h">
+      <Filter>Uniflow Classes</Filter>
+    </ClInclude>
+    <ClInclude Include="uf_orchestrator.h">
+      <Filter>Uniflow Classes</Filter>
+    </ClInclude>
+    <ClInclude Include="uf_stage.h">
+      <Filter>Uniflow Classes</Filter>
+    </ClInclude>
+    <ClInclude Include="uf_unload_picker.h">
+      <Filter>Uniflow Classes</Filter>
+    </ClInclude>
+    <ClInclude Include="app.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
   </ItemGroup>

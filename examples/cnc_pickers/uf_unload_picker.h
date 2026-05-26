@@ -1,5 +1,5 @@
 // unload_picker.h - carries the finished part B -> C. Same shape as
-// LoadPicker but the SOURCE is the contested B zone. PartnerInZoneB
+// UF_LoadPicker but the SOURCE is the contested B zone. PartnerInZoneB
 // for both pickers is defined in unload_picker.cpp where both classes
 // are visible.
 #pragma once
@@ -7,14 +7,14 @@
 #include "globals.h"
 #include "picker_motion.h"
 
-class UnloadPicker : public uniflow::Uniflow<UnloadPicker>,
+class UF_UnloadPicker : public uniflow::Uniflow<UF_UnloadPicker>,
                      public PickerMotion
 {
-    UF_UNIFLOW_IMPLEMENT(UnloadPicker);
+    UF_UNIFLOW_IMPLEMENT(UF_UnloadPicker);
 
 public:
-    explicit UnloadPicker(uniflow::Runtime& rt)
-        : uniflow::Uniflow<UnloadPicker>(rt),
+    explicit UF_UnloadPicker(uniflow::Runtime& rt)
+        : uniflow::Uniflow<UF_UnloadPicker>(rt),
           PickerMotion(GlobalGeometry::kZoneC_mm) {}
 
     StepResult OnUnload_Begin();

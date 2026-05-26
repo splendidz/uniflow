@@ -1,4 +1,4 @@
-// picker_motion.h - x/z/finger axes shared by Load- and UnloadPicker via
+// picker_motion.h - x/z/finger axes shared by Load- and UF_UnloadPicker via
 // composition (not via the CRTP uniflow base, which is per-Derived).
 // finger target: 0 = closed, kFingerOpen_mm = open.
 #pragma once

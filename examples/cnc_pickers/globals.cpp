@@ -26,7 +26,8 @@ bool GlobalEnv::ZoneAHasPart() { return g_zone_a_part; }
 void GlobalEnv::CreateFakeZoneAPart()
 {
     g_zone_a_part = true;
-    App::inst().rt.Notify();   // wake Orchestrator without waiting kSchedTick
+    // UF_Orchestrator polls every Config::stay_sleep (default 20ms) and
+    // picks the new part up on its next round - no external wake needed.
 }
 void GlobalEnv::ConsumeZoneAPart() { g_zone_a_part = false; }
 
@@ -53,7 +54,7 @@ void HwSimulator::DoReady()
         std::this_thread::sleep_for(std::chrono::milliseconds(ms));
         g_hw_ready.store(true, std::memory_order_release);
         // No Notify() here on purpose: real HW would not know about uniflow.
-        // Stage polls IsReady() at its own cadence.
+        // UF_Stage polls IsReady() at its own cadence.
     }).detach();
 }
 bool HwSimulator::IsReady()

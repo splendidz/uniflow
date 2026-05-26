@@ -1,17 +1,17 @@
-#include "orchestrator.h"
+#include "uf_orchestrator.h"
 
 #include "app.h"
-#include "load_picker.h"
-#include "stage.h"
-#include "unload_picker.h"
+#include "uf_load_picker.h"
+#include "uf_stage.h"
+#include "uf_unload_picker.h"
 
-Orchestrator::StepResult Orchestrator::OnSchedule_Begin()
+UF_Orchestrator::StepResult UF_Orchestrator::OnSchedule_Begin()
 {
     ScheduleNextLoaderCreate();
     return UF_NEXT(OnSchedule_Tick);
 }
 
-Orchestrator::StepResult Orchestrator::OnSchedule_Tick()
+UF_Orchestrator::StepResult UF_Orchestrator::OnSchedule_Tick()
 {
     if (GlobalEnv::Stop())
         return Done();
@@ -21,10 +21,10 @@ Orchestrator::StepResult Orchestrator::OnSchedule_Tick()
     TryStartStageProcessing();
     TryStartUnloadPicker();
 
-    return Stay(GlobalTiming::kSchedTick);
+    return Stay();
 }
 
-void Orchestrator::ScheduleNextLoaderCreate()
+void UF_Orchestrator::ScheduleNextLoaderCreate()
 {
     auto min_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                       GlobalTiming::kLoaderMinGap).count();
@@ -35,7 +35,7 @@ void Orchestrator::ScheduleNextLoaderCreate()
                      + std::chrono::milliseconds(d(rng_));
 }
 
-void Orchestrator::TryCreateFakeRawPart()
+void UF_Orchestrator::TryCreateFakeRawPart()
 {
     if (GlobalEnv::ZoneAHasPart())                 return;
     if (uniflow::Clock::now() < next_spawn_at_)    return;
@@ -43,23 +43,23 @@ void Orchestrator::TryCreateFakeRawPart()
     ScheduleNextLoaderCreate();
 }
 
-void Orchestrator::TryStartLoadPicker()
+void UF_Orchestrator::TryStartLoadPicker()
 {
     auto& picker = App::inst().load;
     if (!picker.IsIdle())              return;
     if (!GlobalEnv::ZoneAHasPart())    return;
-    // Prefetch: launch even while Stage isn't Idle - picker parks at the
+    // Prefetch: launch even while UF_Stage isn't Idle - picker parks at the
     // A-side gap.
     UF_START_FLOW(picker, OnLoad_Begin);
 }
 
-void Orchestrator::TryStartUnloadPicker()
+void UF_Orchestrator::TryStartUnloadPicker()
 {
     auto& picker = App::inst().unload;
     if (!picker.IsIdle()) return;
 
     // Prefetch as soon as a part is incoming so the unload picker is
-    // already hovering above B when Stage hands off.
+    // already hovering above B when UF_Stage hands off.
     auto& loader = App::inst().load;
     auto  st     = App::inst().stage.state();
     bool  stage_has_part_incoming =
@@ -72,7 +72,7 @@ void Orchestrator::TryStartUnloadPicker()
     UF_START_FLOW(picker, OnUnload_Begin);
 }
 
-void Orchestrator::TryStartStageProcessing()
+void UF_Orchestrator::TryStartStageProcessing()
 {
     auto& stage = App::inst().stage;
     if (!stage.IsIdle())                              return;

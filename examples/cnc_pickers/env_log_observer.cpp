@@ -39,20 +39,37 @@ void EnvLogObserver::OnFlowStarted(std::string_view obj,
     std::ostringstream os;
     os << "FLOW START";
     if (origin.file)
+    {
         os << "  caller=" << origin.file << ":" << origin.line;
+        if (origin.function)
+            os << " " << origin.function << "()";
+    }
     Emit(obj, os.str());
 }
 
-void EnvLogObserver::OnStepChanged(std::string_view obj, std::string_view step,
+void EnvLogObserver::OnStepChanged(std::string_view obj,
+                                   std::string_view prev_step,
+                                   std::string_view next_step,
                                    std::string_view description,
-                                   int step_ordinal, int /*ticks_in_step*/,
-                                   double elapsed_ms)
+                                   int step_ordinal,
+                                   double elapsed_ms,
+                                   const uniflow::TickStats& step_ticks)
 {
+    std::string transition(prev_step);
+    if (!next_step.empty())
+    {
+        transition += " -> ";
+        transition += std::string(next_step);
+    }
     std::ostringstream os;
-    os << Pad(step, kColStep) << " "
+    os << Pad(transition, kColStep) << " "
        << Pad(description, kColDesc) << " "
        << "#" << Pad2(step_ordinal)
-       << " elapsed=" << FmtMs(elapsed_ms);
+       << " elapsed=" << FmtMs(elapsed_ms)
+       << "  tick x" << step_ticks.count
+       << " avg=" << FmtMs(step_ticks.avg_ms)
+       << " min=" << FmtMs(step_ticks.min_ms)
+       << " max=" << FmtMs(step_ticks.max_ms);
     Emit(obj, os.str());
 }
 
@@ -110,11 +127,12 @@ void EnvLogObserver::OnSlowAsync(std::string_view obj, std::string_view job,
 
 void EnvLogObserver::OnFlowEnded(std::string_view obj,
                                  uniflow::StepAction terminal_action,
-                                 int final_step_ordinal, int /*total_ticks*/,
+                                 int final_step_ordinal,
                                  const std::vector<uniflow::TraceEntry>&,
                                  double wall_ms,
                                  double total_step_ms,
                                  double total_async_ms,
+                                 const uniflow::FlowTickSummary& flow_ticks,
                                  const uniflow::FlowStats&,
                                  uniflow::FlowOrigin origin)
 {
@@ -124,9 +142,19 @@ void EnvLogObserver::OnFlowEnded(std::string_view obj,
        << "  steps=#" << Pad2(final_step_ordinal)
        << "  wall=" << FmtMs(wall_ms)
        << "  step=" << FmtMs(total_step_ms)
-       << "  async=" << FmtMs(total_async_ms);
+       << "  async=" << FmtMs(total_async_ms)
+       << "  tick x" << flow_ticks.all.count
+       << " avg=" << FmtMs(flow_ticks.all.avg_ms)
+       << " min=" << FmtMs(flow_ticks.all.min_ms)
+       << " max=" << FmtMs(flow_ticks.all.max_ms);
+    if (!flow_ticks.max_step.empty())
+        os << " (" << flow_ticks.max_step << ")";
     if (origin.file)
+    {
         os << "  caller=" << origin.file << ":" << origin.line;
+        if (origin.function)
+            os << " " << origin.function << "()";
+    }
     Emit(obj, os.str());
 }
 

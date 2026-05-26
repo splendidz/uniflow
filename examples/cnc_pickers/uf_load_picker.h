@@ -6,14 +6,14 @@
 #include "globals.h"
 #include "picker_motion.h"
 
-class LoadPicker : public uniflow::Uniflow<LoadPicker>,
+class UF_LoadPicker : public uniflow::Uniflow<UF_LoadPicker>,
                    public PickerMotion
 {
-    UF_UNIFLOW_IMPLEMENT(LoadPicker);
+    UF_UNIFLOW_IMPLEMENT(UF_LoadPicker);
 
 public:
-    explicit LoadPicker(uniflow::Runtime& rt)
-        : uniflow::Uniflow<LoadPicker>(rt),
+    explicit UF_LoadPicker(uniflow::Runtime& rt)
+        : uniflow::Uniflow<UF_LoadPicker>(rt),
           PickerMotion(GlobalGeometry::kZoneA_mm) {}
 
     StepResult OnLoad_Begin();
@@ -36,7 +36,7 @@ private:
     StepResult OnLoad_CmdRetreat();
     StepResult OnLoad_WaitAtRetreat();
 
-    // Defined out-of-line in unload_picker.cpp once UnloadPicker is
+    // Defined out-of-line in unload_picker.cpp once UF_UnloadPicker is
     // visible. Forward declaration only.
     bool PartnerInZoneB() const;
 };

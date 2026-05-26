@@ -5,13 +5,13 @@
 
 #include "globals.h"
 
-class Viz : public uniflow::Uniflow<Viz>
+class UF_Visualization : public uniflow::Uniflow<UF_Visualization>
 {
-    UF_UNIFLOW_IMPLEMENT(Viz);
+    UF_UNIFLOW_IMPLEMENT(UF_Visualization);
 
 public:
-    explicit Viz(uniflow::Runtime& rt)
-        : uniflow::Uniflow<Viz>(rt) {}
+    explicit UF_Visualization(uniflow::Runtime& rt)
+        : uniflow::Uniflow<UF_Visualization>(rt) {}
 
     StepResult OnViz_Begin();
 

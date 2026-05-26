@@ -1,13 +1,13 @@
 // viz.cpp - Win32 / console renderer. Define UNIFLOW_CONSOLE_VIZ on
 // Windows to force the console backend.
-#include "viz.h"
+#include "uf_visualization.h"
 
 #include "app.h"
 #include "globals.h"
-#include "load_picker.h"
 #include "snapshot.h"
-#include "stage.h"
-#include "unload_picker.h"
+#include "uf_load_picker.h"
+#include "uf_stage.h"
+#include "uf_unload_picker.h"
 
 #include <chrono>
 #include <cmath>
@@ -18,12 +18,12 @@
 
 using namespace std::chrono_literals;
 
-Viz::StepResult Viz::OnViz_Begin()
+UF_Visualization::StepResult UF_Visualization::OnViz_Begin()
 {
     return UF_NEXT(OnViz_Tick);
 }
 
-Viz::StepResult Viz::OnViz_Tick()
+UF_Visualization::StepResult UF_Visualization::OnViz_Tick()
 {
     if (GlobalEnv::Stop())
         return Done();
@@ -49,7 +49,7 @@ Viz::StepResult Viz::OnViz_Tick()
         g_snap.zoneA_has_part       = GlobalEnv::ZoneAHasPart();
         g_snap.delivered            = GlobalEnv::DeliveredCount();
     }
-    return Stay(GlobalTiming::kVizTick);
+    return Stay();
 }
 
 #if defined(_WIN32) && !defined(UNIFLOW_CONSOLE_VIZ)

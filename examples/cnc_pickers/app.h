@@ -6,12 +6,12 @@
 #pragma once
 
 #include "env_log_observer.h"
-#include "load_picker.h"
-#include "orchestrator.h"
-#include "stage.h"
 #include "uniflow.hpp"
-#include "unload_picker.h"
-#include "viz.h"
+#include "uf_load_picker.h"
+#include "uf_orchestrator.h"
+#include "uf_stage.h"
+#include "uf_unload_picker.h"
+#include "uf_visualization.h"
 
 #include <memory>
 
@@ -26,11 +26,11 @@ public:
 
     // Phase 1.
     uniflow::Runtime rt{MakeOpts()};
-    Stage         stage{rt};
-    Viz           viz{rt};
-    LoadPicker    load{rt};
-    UnloadPicker  unload{rt};
-    Orchestrator  orch{rt};
+    UF_Stage         stage{rt};
+    UF_Visualization           viz{rt};
+    UF_LoadPicker    load{rt};
+    UF_UnloadPicker  unload{rt};
+    UF_Orchestrator  orch{rt};
 
     // Phase 2.
     void Start()
@@ -60,9 +60,9 @@ private:
         opts.observer = std::make_unique<EnvLogObserver>("cnc_pickers.log");
         // Pump sleep policy. Defaults are fine for this demo; shown here
         // so it is obvious where to tune them.
-        opts.config.step_interval_sleep = 0ms;  // any-Next round: burst
-        opts.config.stay_sleep          = 20ms; // active but all-Stay
-        opts.config.idle_sleep          = 1ms;  // no flows running
+        opts.config.step_interval_sleep_ms = 0ms;  // any-Next round: burst
+        opts.config.stay_sleep_ms          = 20ms; // active but all-Stay
+        opts.config.idle_sleep_ms          = 1ms;  // no flows running
         return opts;
     }
 };

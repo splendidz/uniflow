@@ -1,21 +1,21 @@
 // unload_picker.cpp - flow steps + PartnerInZoneB for both pickers.
-#include "unload_picker.h"
+#include "uf_unload_picker.h"
 
 #include "app.h"
-#include "load_picker.h"
-#include "stage.h"
+#include "uf_load_picker.h"
+#include "uf_stage.h"
 
-UnloadPicker::StepResult UnloadPicker::OnUnload_Begin()
+UF_UnloadPicker::StepResult UF_UnloadPicker::OnUnload_Begin()
 {
     Describe("flow start");
     return UF_NEXT(OnUnload_CmdMoveToSource);
 }
 
-// --- Source (zone B). Enter B only when Stage has already started
-//     processing AND LoadPicker is neither in B nor carrying toward it.
+// --- Source (zone B). Enter B only when UF_Stage has already started
+//     processing AND UF_LoadPicker is neither in B nor carrying toward it.
 //     Then hover at B with Z up; Z lowering waits for hand-off readiness. ---
 
-UnloadPicker::StepResult UnloadPicker::OnUnload_CmdMoveToSource()
+UF_UnloadPicker::StepResult UF_UnloadPicker::OnUnload_CmdMoveToSource()
 {
     if (GlobalEnv::Stop()) return Done();
 
@@ -49,7 +49,7 @@ UnloadPicker::StepResult UnloadPicker::OnUnload_CmdMoveToSource()
     return UF_NEXT(OnUnload_WaitAtSource);
 }
 
-UnloadPicker::StepResult UnloadPicker::OnUnload_WaitAtSource()
+UF_UnloadPicker::StepResult UF_UnloadPicker::OnUnload_WaitAtSource()
 {
     if (GlobalEnv::Stop()) return Done();
     x_axis_.Update(GlobalGeometry::kXSpeed_mm_per_s);
@@ -58,7 +58,7 @@ UnloadPicker::StepResult UnloadPicker::OnUnload_WaitAtSource()
     return Stay();
 }
 
-UnloadPicker::StepResult UnloadPicker::OnUnload_CmdLowerToPick()
+UF_UnloadPicker::StepResult UF_UnloadPicker::OnUnload_CmdLowerToPick()
 {
     if (GlobalEnv::Stop()) return Done();
     if (!App::inst().stage.ReadyToHandOffProcessedPart())
@@ -72,7 +72,7 @@ UnloadPicker::StepResult UnloadPicker::OnUnload_CmdLowerToPick()
     return UF_NEXT(OnUnload_WaitAtPickDown);
 }
 
-UnloadPicker::StepResult UnloadPicker::OnUnload_WaitAtPickDown()
+UF_UnloadPicker::StepResult UF_UnloadPicker::OnUnload_WaitAtPickDown()
 {
     if (GlobalEnv::Stop()) return Done();
     z_axis_.Update(GlobalGeometry::kZSpeed_mm_per_s);
@@ -81,7 +81,7 @@ UnloadPicker::StepResult UnloadPicker::OnUnload_WaitAtPickDown()
     return Stay();
 }
 
-UnloadPicker::StepResult UnloadPicker::OnUnload_HandGrip()
+UF_UnloadPicker::StepResult UF_UnloadPicker::OnUnload_HandGrip()
 {
     if (GlobalEnv::Stop()) return Done();
     finger_axis_.SetTarget(0.0);
@@ -93,7 +93,7 @@ UnloadPicker::StepResult UnloadPicker::OnUnload_HandGrip()
     return UF_NEXT(OnUnload_CmdLiftWithPart);
 }
 
-UnloadPicker::StepResult UnloadPicker::OnUnload_CmdLiftWithPart()
+UF_UnloadPicker::StepResult UF_UnloadPicker::OnUnload_CmdLiftWithPart()
 {
     if (GlobalEnv::Stop()) return Done();
     Describe("cmd: lift with part");
@@ -101,7 +101,7 @@ UnloadPicker::StepResult UnloadPicker::OnUnload_CmdLiftWithPart()
     return UF_NEXT(OnUnload_WaitAtPickUp);
 }
 
-UnloadPicker::StepResult UnloadPicker::OnUnload_WaitAtPickUp()
+UF_UnloadPicker::StepResult UF_UnloadPicker::OnUnload_WaitAtPickUp()
 {
     if (GlobalEnv::Stop()) return Done();
     z_axis_.Update(GlobalGeometry::kZSpeed_mm_per_s);
@@ -112,7 +112,7 @@ UnloadPicker::StepResult UnloadPicker::OnUnload_WaitAtPickUp()
 
 // --- Destination (zone C) ---
 
-UnloadPicker::StepResult UnloadPicker::OnUnload_CmdMoveToUnload()
+UF_UnloadPicker::StepResult UF_UnloadPicker::OnUnload_CmdMoveToUnload()
 {
     if (GlobalEnv::Stop()) return Done();
     Describe("cmd: move to zone C");
@@ -120,7 +120,7 @@ UnloadPicker::StepResult UnloadPicker::OnUnload_CmdMoveToUnload()
     return UF_NEXT(OnUnload_WaitAtUnload);
 }
 
-UnloadPicker::StepResult UnloadPicker::OnUnload_WaitAtUnload()
+UF_UnloadPicker::StepResult UF_UnloadPicker::OnUnload_WaitAtUnload()
 {
     if (GlobalEnv::Stop()) return Done();
     x_axis_.Update(GlobalGeometry::kXSpeed_mm_per_s);
@@ -129,7 +129,7 @@ UnloadPicker::StepResult UnloadPicker::OnUnload_WaitAtUnload()
     return Stay();
 }
 
-UnloadPicker::StepResult UnloadPicker::OnUnload_CmdLowerToPlace()
+UF_UnloadPicker::StepResult UF_UnloadPicker::OnUnload_CmdLowerToPlace()
 {
     if (GlobalEnv::Stop()) return Done();
     Describe("cmd: lower to place");
@@ -137,7 +137,7 @@ UnloadPicker::StepResult UnloadPicker::OnUnload_CmdLowerToPlace()
     return UF_NEXT(OnUnload_WaitAtPlaceDown);
 }
 
-UnloadPicker::StepResult UnloadPicker::OnUnload_WaitAtPlaceDown()
+UF_UnloadPicker::StepResult UF_UnloadPicker::OnUnload_WaitAtPlaceDown()
 {
     if (GlobalEnv::Stop()) return Done();
     z_axis_.Update(GlobalGeometry::kZSpeed_mm_per_s);
@@ -146,7 +146,7 @@ UnloadPicker::StepResult UnloadPicker::OnUnload_WaitAtPlaceDown()
     return Stay();
 }
 
-UnloadPicker::StepResult UnloadPicker::OnUnload_HandRelease()
+UF_UnloadPicker::StepResult UF_UnloadPicker::OnUnload_HandRelease()
 {
     if (GlobalEnv::Stop()) return Done();
     finger_axis_.SetTarget(GlobalGeometry::kFingerOpen_mm);
@@ -158,7 +158,7 @@ UnloadPicker::StepResult UnloadPicker::OnUnload_HandRelease()
     return UF_NEXT(OnUnload_CmdLiftEmpty);
 }
 
-UnloadPicker::StepResult UnloadPicker::OnUnload_CmdLiftEmpty()
+UF_UnloadPicker::StepResult UF_UnloadPicker::OnUnload_CmdLiftEmpty()
 {
     if (GlobalEnv::Stop()) return Done();
     Describe("cmd: lift empty");
@@ -166,7 +166,7 @@ UnloadPicker::StepResult UnloadPicker::OnUnload_CmdLiftEmpty()
     return UF_NEXT(OnUnload_WaitAtPlaceUp);
 }
 
-UnloadPicker::StepResult UnloadPicker::OnUnload_WaitAtPlaceUp()
+UF_UnloadPicker::StepResult UF_UnloadPicker::OnUnload_WaitAtPlaceUp()
 {
     if (GlobalEnv::Stop()) return Done();
     z_axis_.Update(GlobalGeometry::kZSpeed_mm_per_s);
@@ -175,7 +175,7 @@ UnloadPicker::StepResult UnloadPicker::OnUnload_WaitAtPlaceUp()
     return Stay();
 }
 
-UnloadPicker::StepResult UnloadPicker::OnUnload_CmdRetreat()
+UF_UnloadPicker::StepResult UF_UnloadPicker::OnUnload_CmdRetreat()
 {
     if (GlobalEnv::Stop()) return Done();
     Describe("cmd: retreat to C");
@@ -183,7 +183,7 @@ UnloadPicker::StepResult UnloadPicker::OnUnload_CmdRetreat()
     return UF_NEXT(OnUnload_WaitAtRetreat);
 }
 
-UnloadPicker::StepResult UnloadPicker::OnUnload_WaitAtRetreat()
+UF_UnloadPicker::StepResult UF_UnloadPicker::OnUnload_WaitAtRetreat()
 {
     if (GlobalEnv::Stop()) return Done();
     x_axis_.Update(GlobalGeometry::kXSpeed_mm_per_s);
@@ -192,11 +192,11 @@ UnloadPicker::StepResult UnloadPicker::OnUnload_WaitAtRetreat()
     return Stay();
 }
 
-bool LoadPicker::PartnerInZoneB() const
+bool UF_LoadPicker::PartnerInZoneB() const
 {
     return App::inst().unload.InsideZoneB();
 }
-bool UnloadPicker::PartnerInZoneB() const
+bool UF_UnloadPicker::PartnerInZoneB() const
 {
     return App::inst().load.InsideZoneB();
 }

@@ -1,9 +1,9 @@
-#include "load_picker.h"
+#include "uf_load_picker.h"
 
 #include "app.h"
-#include "stage.h"
+#include "uf_stage.h"
 
-LoadPicker::StepResult LoadPicker::OnLoad_Begin()
+UF_LoadPicker::StepResult UF_LoadPicker::OnLoad_Begin()
 {
     Describe("flow start");
     return UF_NEXT(OnLoad_CmdMoveToSource);
@@ -11,7 +11,7 @@ LoadPicker::StepResult LoadPicker::OnLoad_Begin()
 
 // --- Source (zone A) ---
 
-LoadPicker::StepResult LoadPicker::OnLoad_CmdMoveToSource()
+UF_LoadPicker::StepResult UF_LoadPicker::OnLoad_CmdMoveToSource()
 {
     if (GlobalEnv::Stop()) return Done();
     Describe("cmd: move to zone A");
@@ -19,7 +19,7 @@ LoadPicker::StepResult LoadPicker::OnLoad_CmdMoveToSource()
     return UF_NEXT(OnLoad_WaitAtSource);
 }
 
-LoadPicker::StepResult LoadPicker::OnLoad_WaitAtSource()
+UF_LoadPicker::StepResult UF_LoadPicker::OnLoad_WaitAtSource()
 {
     if (GlobalEnv::Stop()) return Done();
     x_axis_.Update(GlobalGeometry::kXSpeed_mm_per_s);
@@ -28,7 +28,7 @@ LoadPicker::StepResult LoadPicker::OnLoad_WaitAtSource()
     return Stay();
 }
 
-LoadPicker::StepResult LoadPicker::OnLoad_CmdLowerToPick()
+UF_LoadPicker::StepResult UF_LoadPicker::OnLoad_CmdLowerToPick()
 {
     if (GlobalEnv::Stop()) return Done();
     Describe("cmd: lower to pick");
@@ -36,7 +36,7 @@ LoadPicker::StepResult LoadPicker::OnLoad_CmdLowerToPick()
     return UF_NEXT(OnLoad_WaitAtPickDown);
 }
 
-LoadPicker::StepResult LoadPicker::OnLoad_WaitAtPickDown()
+UF_LoadPicker::StepResult UF_LoadPicker::OnLoad_WaitAtPickDown()
 {
     if (GlobalEnv::Stop()) return Done();
     z_axis_.Update(GlobalGeometry::kZSpeed_mm_per_s);
@@ -45,7 +45,7 @@ LoadPicker::StepResult LoadPicker::OnLoad_WaitAtPickDown()
     return Stay();
 }
 
-LoadPicker::StepResult LoadPicker::OnLoad_HandGrip()
+UF_LoadPicker::StepResult UF_LoadPicker::OnLoad_HandGrip()
 {
     if (GlobalEnv::Stop()) return Done();
     finger_axis_.SetTarget(0.0);
@@ -57,7 +57,7 @@ LoadPicker::StepResult LoadPicker::OnLoad_HandGrip()
     return UF_NEXT(OnLoad_CmdLiftWithPart);
 }
 
-LoadPicker::StepResult LoadPicker::OnLoad_CmdLiftWithPart()
+UF_LoadPicker::StepResult UF_LoadPicker::OnLoad_CmdLiftWithPart()
 {
     if (GlobalEnv::Stop()) return Done();
     Describe("cmd: lift with part");
@@ -65,7 +65,7 @@ LoadPicker::StepResult LoadPicker::OnLoad_CmdLiftWithPart()
     return UF_NEXT(OnLoad_WaitAtPickUp);
 }
 
-LoadPicker::StepResult LoadPicker::OnLoad_WaitAtPickUp()
+UF_LoadPicker::StepResult UF_LoadPicker::OnLoad_WaitAtPickUp()
 {
     if (GlobalEnv::Stop()) return Done();
     z_axis_.Update(GlobalGeometry::kZSpeed_mm_per_s);
@@ -74,9 +74,9 @@ LoadPicker::StepResult LoadPicker::OnLoad_WaitAtPickUp()
     return Stay();
 }
 
-// --- Destination (zone B) - gated by Stage readiness + partner ---
+// --- Destination (zone B) - gated by UF_Stage readiness + partner ---
 
-LoadPicker::StepResult LoadPicker::OnLoad_CmdMoveToDest()
+UF_LoadPicker::StepResult UF_LoadPicker::OnLoad_CmdMoveToDest()
 {
     if (GlobalEnv::Stop()) return Done();
     bool may_enter_B =
@@ -100,7 +100,7 @@ LoadPicker::StepResult LoadPicker::OnLoad_CmdMoveToDest()
     return UF_NEXT(OnLoad_WaitAtDest);
 }
 
-LoadPicker::StepResult LoadPicker::OnLoad_WaitAtDest()
+UF_LoadPicker::StepResult UF_LoadPicker::OnLoad_WaitAtDest()
 {
     if (GlobalEnv::Stop()) return Done();
     x_axis_.Update(GlobalGeometry::kXSpeed_mm_per_s);
@@ -109,7 +109,7 @@ LoadPicker::StepResult LoadPicker::OnLoad_WaitAtDest()
     return Stay();
 }
 
-LoadPicker::StepResult LoadPicker::OnLoad_CmdLowerToPlace()
+UF_LoadPicker::StepResult UF_LoadPicker::OnLoad_CmdLowerToPlace()
 {
     if (GlobalEnv::Stop()) return Done();
     Describe("cmd: lower to place");
@@ -117,7 +117,7 @@ LoadPicker::StepResult LoadPicker::OnLoad_CmdLowerToPlace()
     return UF_NEXT(OnLoad_WaitAtPlaceDown);
 }
 
-LoadPicker::StepResult LoadPicker::OnLoad_WaitAtPlaceDown()
+UF_LoadPicker::StepResult UF_LoadPicker::OnLoad_WaitAtPlaceDown()
 {
     if (GlobalEnv::Stop()) return Done();
     z_axis_.Update(GlobalGeometry::kZSpeed_mm_per_s);
@@ -126,7 +126,7 @@ LoadPicker::StepResult LoadPicker::OnLoad_WaitAtPlaceDown()
     return Stay();
 }
 
-LoadPicker::StepResult LoadPicker::OnLoad_HandRelease()
+UF_LoadPicker::StepResult UF_LoadPicker::OnLoad_HandRelease()
 {
     if (GlobalEnv::Stop()) return Done();
     finger_axis_.SetTarget(GlobalGeometry::kFingerOpen_mm);
@@ -138,7 +138,7 @@ LoadPicker::StepResult LoadPicker::OnLoad_HandRelease()
     return UF_NEXT(OnLoad_CmdLiftEmpty);
 }
 
-LoadPicker::StepResult LoadPicker::OnLoad_CmdLiftEmpty()
+UF_LoadPicker::StepResult UF_LoadPicker::OnLoad_CmdLiftEmpty()
 {
     if (GlobalEnv::Stop()) return Done();
     Describe("cmd: lift empty");
@@ -146,7 +146,7 @@ LoadPicker::StepResult LoadPicker::OnLoad_CmdLiftEmpty()
     return UF_NEXT(OnLoad_WaitAtPlaceUp);
 }
 
-LoadPicker::StepResult LoadPicker::OnLoad_WaitAtPlaceUp()
+UF_LoadPicker::StepResult UF_LoadPicker::OnLoad_WaitAtPlaceUp()
 {
     if (GlobalEnv::Stop()) return Done();
     z_axis_.Update(GlobalGeometry::kZSpeed_mm_per_s);
@@ -155,7 +155,7 @@ LoadPicker::StepResult LoadPicker::OnLoad_WaitAtPlaceUp()
     return Stay();
 }
 
-LoadPicker::StepResult LoadPicker::OnLoad_CmdRetreat()
+UF_LoadPicker::StepResult UF_LoadPicker::OnLoad_CmdRetreat()
 {
     if (GlobalEnv::Stop()) return Done();
     Describe("cmd: retreat to A");
@@ -163,7 +163,7 @@ LoadPicker::StepResult LoadPicker::OnLoad_CmdRetreat()
     return UF_NEXT(OnLoad_WaitAtRetreat);
 }
 
-LoadPicker::StepResult LoadPicker::OnLoad_WaitAtRetreat()
+UF_LoadPicker::StepResult UF_LoadPicker::OnLoad_WaitAtRetreat()
 {
     if (GlobalEnv::Stop()) return Done();
     x_axis_.Update(GlobalGeometry::kXSpeed_mm_per_s);

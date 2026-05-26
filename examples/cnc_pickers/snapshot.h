@@ -1,4 +1,4 @@
-// snapshot.h - pump -> UI hand-off. Viz writes g_snap under g_snap_mu;
+// snapshot.h - pump -> UI hand-off. UF_Visualization writes g_snap under g_snap_mu;
 // the render thread reads via ReadSnapshot(). Only cross-thread lock here.
 #pragma once
 

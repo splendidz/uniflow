@@ -20,10 +20,13 @@ public:
 
     void OnFlowStarted(std::string_view obj,
                        uniflow::FlowOrigin origin) override;
-    void OnStepChanged(std::string_view obj, std::string_view step,
+    void OnStepChanged(std::string_view obj,
+                       std::string_view prev_step,
+                       std::string_view next_step,
                        std::string_view description,
-                       int step_ordinal, int ticks_in_step,
-                       double elapsed_ms) override;
+                       int step_ordinal,
+                       double elapsed_ms,
+                       const uniflow::TickStats& step_ticks) override;
     void OnStepThrew(std::string_view obj, std::string_view step,
                      std::string_view what,
                      int step_ordinal, int tick) override;
@@ -38,11 +41,12 @@ public:
                      double wait_so_far_ms) override;
     void OnFlowEnded(std::string_view obj,
                      uniflow::StepAction terminal_action,
-                     int final_step_ordinal, int total_ticks,
+                     int final_step_ordinal,
                      const std::vector<uniflow::TraceEntry>&,
                      double wall_ms,
                      double total_step_ms,
                      double total_async_ms,
+                     const uniflow::FlowTickSummary& flow_ticks,
                      const uniflow::FlowStats&,
                      uniflow::FlowOrigin origin) override;
 
