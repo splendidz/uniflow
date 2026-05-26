@@ -45,26 +45,25 @@ void EnvLogObserver::OnFlowStarted(std::string_view obj,
 
 void EnvLogObserver::OnStepChanged(std::string_view obj, std::string_view step,
                                    std::string_view description,
-                                   int step_ordinal, int ticks_in_step,
+                                   int step_ordinal, int /*ticks_in_step*/,
                                    double elapsed_ms)
 {
     std::ostringstream os;
     os << Pad(step, kColStep) << " "
        << Pad(description, kColDesc) << " "
        << "#" << Pad2(step_ordinal)
-       << " ticks=" << Pad2(ticks_in_step)
        << " elapsed=" << FmtMs(elapsed_ms);
     Emit(obj, os.str());
 }
 
 void EnvLogObserver::OnStepThrew(std::string_view obj, std::string_view step,
                                  std::string_view what,
-                                 int step_ordinal, int tick)
+                                 int step_ordinal, int /*tick*/)
 {
     std::ostringstream os;
     os << Pad(step, kColStep) << " "
        << "[THREW] " << what
-       << "  #" << Pad2(step_ordinal) << "/#" << Pad2(tick);
+       << "  #" << Pad2(step_ordinal);
     Emit(obj, os.str());
 }
 
@@ -111,7 +110,7 @@ void EnvLogObserver::OnSlowAsync(std::string_view obj, std::string_view job,
 
 void EnvLogObserver::OnFlowEnded(std::string_view obj,
                                  uniflow::StepAction terminal_action,
-                                 int final_step_ordinal, int total_ticks,
+                                 int final_step_ordinal, int /*total_ticks*/,
                                  const std::vector<uniflow::TraceEntry>&,
                                  double wall_ms,
                                  double total_step_ms,
@@ -123,7 +122,6 @@ void EnvLogObserver::OnFlowEnded(std::string_view obj,
     os << "FLOW "
        << (terminal_action == uniflow::StepAction::Done ? "END  DONE" : "END  FAIL")
        << "  steps=#" << Pad2(final_step_ordinal)
-       << " ticks=#" << Pad2(total_ticks)
        << "  wall=" << FmtMs(wall_ms)
        << "  step=" << FmtMs(total_step_ms)
        << "  async=" << FmtMs(total_async_ms);

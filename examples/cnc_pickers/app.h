@@ -54,9 +54,15 @@ private:
 
     static uniflow::Runtime::Opts MakeOpts()
     {
+        using namespace std::chrono_literals;
         uniflow::Runtime::Opts opts;
         opts.threads  = 8;
         opts.observer = std::make_unique<EnvLogObserver>("cnc_pickers.log");
+        // Pump sleep policy. Defaults are fine for this demo; shown here
+        // so it is obvious where to tune them.
+        opts.config.step_interval_sleep = 0ms;  // any-Next round: burst
+        opts.config.stay_sleep          = 20ms; // active but all-Stay
+        opts.config.idle_sleep          = 1ms;  // no flows running
         return opts;
     }
 };

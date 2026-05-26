@@ -58,7 +58,7 @@ Stage::StepResult Stage::OnProcess_WaitHwReady(uniflow::UFTimer& t)
         return Fail();
     }
     else if (result == uniflow::UFTimer::Waiting)
-        return Wait();
+        return Stay();
 
     Describe("processing");
     table_y_offset_mm_ = 0.0;
@@ -70,7 +70,7 @@ Stage::StepResult Stage::OnProcess_WaitHwReady(uniflow::UFTimer& t)
 Stage::StepResult Stage::OnProcess_Run(uniflow::UFTimer& t)
 {
     if (GlobalEnv::Stop()) return Done();
-    // by-ref param: Stay/Wait re-enter touches the SAME timer in the next-step
+    // by-ref param: Stay re-enter touches the SAME timer in the next-step
     // capture, so Elapsed() keeps growing from initial arming.
     auto   elapsed = t.Elapsed();
     double frac =
@@ -88,7 +88,7 @@ Stage::StepResult Stage::OnProcess_Run(uniflow::UFTimer& t)
         Describe("send cleanup cmd");
         return UF_NEXT(OnProcess_SendCleanupCmd);
     }
-    return Wait(GlobalTiming::kPoll_fast);
+    return Stay(GlobalTiming::kPoll_fast);
 }
 
 Stage::StepResult Stage::OnProcess_SendCleanupCmd()
@@ -117,7 +117,7 @@ Stage::StepResult Stage::OnProcess_ReturnToPickPos()
     table_x_axis_.Update(GlobalGeometry::kXSpeed_mm_per_s);
     table_y_offset_mm_ = 0.0;
     if (!table_x_axis_.InPosition())
-        return Wait(GlobalTiming::kPoll_fast);
+        return Stay(GlobalTiming::kPoll_fast);
 
     state_ = StageState::ProcessedPartReady;
     Describe("ready to hand off");

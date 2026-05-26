@@ -9,7 +9,7 @@
 class LoadPicker : public uniflow::Uniflow<LoadPicker>,
                    public PickerMotion
 {
-    UF_USES_UNIFLOW(LoadPicker);
+    UF_UNIFLOW_IMPLEMENT(LoadPicker);
 
 public:
     explicit LoadPicker(uniflow::Runtime& rt)

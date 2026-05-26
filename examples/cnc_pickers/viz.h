@@ -7,7 +7,7 @@
 
 class Viz : public uniflow::Uniflow<Viz>
 {
-    UF_USES_UNIFLOW(Viz);
+    UF_UNIFLOW_IMPLEMENT(Viz);
 
 public:
     explicit Viz(uniflow::Runtime& rt)

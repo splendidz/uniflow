@@ -49,7 +49,7 @@ Viz::StepResult Viz::OnViz_Tick()
         g_snap.zoneA_has_part       = GlobalEnv::ZoneAHasPart();
         g_snap.delivered            = GlobalEnv::DeliveredCount();
     }
-    return Wait(GlobalTiming::kVizTick);
+    return Stay(GlobalTiming::kVizTick);
 }
 
 #if defined(_WIN32) && !defined(UNIFLOW_CONSOLE_VIZ)

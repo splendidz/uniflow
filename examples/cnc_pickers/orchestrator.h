@@ -10,7 +10,7 @@
 
 class Orchestrator : public uniflow::Uniflow<Orchestrator>
 {
-    UF_USES_UNIFLOW(Orchestrator);
+    UF_UNIFLOW_IMPLEMENT(Orchestrator);
 
 public:
     explicit Orchestrator(uniflow::Runtime& rt)

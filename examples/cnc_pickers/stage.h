@@ -7,7 +7,7 @@
 
 class Stage : public uniflow::Uniflow<Stage>
 {
-    UF_USES_UNIFLOW(Stage);
+    UF_UNIFLOW_IMPLEMENT(Stage);
 
 public:
     explicit Stage(uniflow::Runtime& rt)

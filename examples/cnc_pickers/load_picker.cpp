@@ -93,7 +93,7 @@ LoadPicker::StepResult LoadPicker::OnLoad_CmdMoveToDest()
         }
         Describe("parked at A-gap: stage=", ToString(App::inst().stage.state()),
                  " partner_in_B=", PartnerInZoneB());
-        return Wait();
+        return Stay();
     }
     Describe("cmd: move to zone B");
     x_axis_.SetTarget(GlobalGeometry::kZoneB_mm);

@@ -42,7 +42,7 @@ UnloadPicker::StepResult UnloadPicker::OnUnload_CmdMoveToSource()
         Describe("parked at C-gap: stage=", ToString(st),
                  " load_carry=", load.Carrying(),
                  " load_in_B=", load.InsideZoneB());
-        return Wait();
+        return Stay();
     }
     Describe("cmd: move to zone B");
     x_axis_.SetTarget(GlobalGeometry::kZoneB_mm);
@@ -65,7 +65,7 @@ UnloadPicker::StepResult UnloadPicker::OnUnload_CmdLowerToPick()
     {
         Describe("hovering above B: stage=",
                  ToString(App::inst().stage.state()));
-        return Wait();
+        return Stay();
     }
     Describe("cmd: lower to pick");
     z_axis_.SetTarget(GlobalGeometry::kZDown_mm);

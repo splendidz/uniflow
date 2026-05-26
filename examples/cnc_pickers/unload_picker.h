@@ -10,7 +10,7 @@
 class UnloadPicker : public uniflow::Uniflow<UnloadPicker>,
                      public PickerMotion
 {
-    UF_USES_UNIFLOW(UnloadPicker);
+    UF_UNIFLOW_IMPLEMENT(UnloadPicker);
 
 public:
     explicit UnloadPicker(uniflow::Runtime& rt)

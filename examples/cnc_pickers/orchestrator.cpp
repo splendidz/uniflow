@@ -21,7 +21,7 @@ Orchestrator::StepResult Orchestrator::OnSchedule_Tick()
     TryStartStageProcessing();
     TryStartUnloadPicker();
 
-    return Wait(GlobalTiming::kSchedTick);
+    return Stay(GlobalTiming::kSchedTick);
 }
 
 void Orchestrator::ScheduleNextLoaderCreate()
