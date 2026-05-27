@@ -73,3 +73,31 @@ Testing/
 *.vcxproj.user
 *.VC.db
 *.VC.opendb
+*.suo
+*.sdf
+*.opensdf
+
+# MSBuild per-config output directories.
+# This is what makes "examples/cnc_pickers/cnc_pickers/x64", "examples/<x>/x64", etc
+# spam git status. They are pure build intermediates.
+**/x64/
+**/Win32/
+**/Debug/
+**/Release/
+
+# MSBuild incremental + log artifacts.
+*.exp
+*.iobj
+*.ipdb
+*.tlog
+*.idb
+
+# IDE / editor noise not covered above.
+.vscode/
+.idea/
+
+# OS metadata.
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
