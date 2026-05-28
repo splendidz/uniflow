@@ -236,6 +236,19 @@ constexpr const char* basename_of(const char* path)
     return file;
 }
 
+// Source location of a Post / PostAndWait / Link call, captured by the
+// UF_POST / UF_POST_WAIT / UF_LINK macros (file basename / __LINE__ /
+// __FUNCTION__) and handed to the matching observer hooks so cross-runtime
+// traffic is traceable to its caller. All fields stay blank when the bare
+// Runtime method is called without a macro. Mirrors FlowOrigin, which plays
+// the same role for UF_START_FLOW.
+struct CallSite
+{
+    const char* file     = nullptr; // basename only (no directory)
+    int         line     = 0;
+    const char* function = nullptr; // __FUNCTION__ of the caller
+};
+
 // Every log line / metric the framework produces is funnelled through one of
 // these hooks - the framework itself never touches std::cout. Subclass and
 // pass via Runtime::Opts::observer; override only the events you care about.
@@ -351,6 +364,36 @@ public:
                              [[maybe_unused]] const FlowTickSummary& flow_ticks,
                              [[maybe_unused]] const FlowStats& stats,
                              [[maybe_unused]] FlowOrigin       origin) {}
+
+    // ----- Cross-runtime traffic (Post / PostAndWait / Link) -----
+    // Logging for these is mandatory in practice - a callback hopping pump
+    // threads is exactly the kind of control flow that is invisible in a
+    // stack trace, so every hook carries the caller's source location.
+
+    // Fired when a callback is enqueued via Post / PostAndWait. Runs on the
+    // CALLING thread, which may be any thread (another runtime's step, a
+    // non-uniflow worker, main) - implementations MUST be thread-safe.
+    //   'runtime_index' - index of the runtime the callback was posted to.
+    //   'blocking'      - true for PostAndWait, false for Post.
+    //   'caller'        - UF_POST / UF_POST_WAIT call site (blank if posted
+    //                     through the bare method without a macro).
+    virtual void OnPostSubmitted([[maybe_unused]] int runtime_index,
+                                 [[maybe_unused]] bool blocking,
+                                 [[maybe_unused]] CallSite caller) {}
+
+    // Fired on the pump thread right after a posted callback runs.
+    //   'queue_wait_ms' - time the callback spent queued before the pump
+    //                     picked it up.
+    virtual void OnPostExecuted([[maybe_unused]] int runtime_index,
+                                [[maybe_unused]] bool blocking,
+                                [[maybe_unused]] double queue_wait_ms,
+                                [[maybe_unused]] CallSite caller) {}
+
+    // Fired right after Runtime::Link() parks 'linked's pump and hands its
+    // objects to 'driver's pump. Runs on the thread that called Link.
+    virtual void OnLinked([[maybe_unused]] int driver_index,
+                          [[maybe_unused]] int linked_index,
+                          [[maybe_unused]] CallSite caller) {}
 };
 
 // Default observer - pretty-prints to stdout in fixed-width columns. Thread-
@@ -480,8 +523,53 @@ public:
         }
         std::cout << "\n";
     }
+    void OnPostSubmitted(int runtime_index, bool blocking,
+                         CallSite caller) override
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        std::cout << "[" << pad(rt_label(runtime_index), kColObj) << "] "
+                  << pad(blocking ? "POSTWAIT SUBMIT" : "POST SUBMIT", kColStep)
+                  << " ";
+        print_caller(caller);
+        std::cout << "\n";
+    }
+    void OnPostExecuted(int runtime_index, bool blocking, double queue_wait_ms,
+                        CallSite caller) override
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        std::cout << "[" << pad(rt_label(runtime_index), kColObj) << "] "
+                  << pad(blocking ? "POSTWAIT RUN" : "POST RUN", kColStep) << " "
+                  << "queue=" << fmt_ms(queue_wait_ms) << "  ";
+        print_caller(caller);
+        std::cout << "\n";
+    }
+    void OnLinked(int driver_index, int linked_index, CallSite caller) override
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        std::cout << "[" << pad(rt_label(driver_index), kColObj) << "] "
+                  << pad("LINK", kColStep) << " "
+                  << "rt#" << linked_index << " -> rt#" << driver_index << "  ";
+        print_caller(caller);
+        std::cout << "\n";
+    }
 
 private:
+    static std::string rt_label(int idx)
+    {
+        std::ostringstream os;
+        os << "rt#" << idx;
+        return os.str();
+    }
+    // Caller-side of the lock: only invoked from the locked hooks above.
+    static void print_caller(CallSite c)
+    {
+        if (c.file)
+        {
+            std::cout << "caller=" << c.file << ":" << c.line;
+            if (c.function)
+                std::cout << " " << c.function << "()";
+        }
+    }
     static std::string pad(std::string_view sv, int width)
     {
         std::string s(sv);
@@ -588,9 +676,15 @@ std::unique_ptr<IExecutor> make_default_executor(std::size_t threads);
 //
 //  Multi-runtime use:
 //    - Create more than one 'Runtime' to get more than one pump thread.
-//    - A module belongs to exactly one Runtime; cross-runtime access from a
-//      step body is unsafe (no locks between modules on different pumps).
-//      Use 'RuntimeIndex()' and 'detail::t_runtime_idx' for asserts.
+//    - A module belongs to exactly one Runtime; directly touching another
+//      runtime's module state from a step is unsafe (no locks between modules
+//      on different pumps). Use 'RuntimeIndex()' / 'DriverIndex()' and
+//      'detail::t_runtime_idx' for asserts.
+//    - To reach state owned by another runtime safely, 'Post' a callback to
+//      it (runs on its pump thread, no locks) or 'PostAndWait' for a result.
+//    - If two runtimes end up sharing enough state that posting is not
+//      enough, 'Link' one onto the other: a single pump thread then drives
+//      both, restoring the lock-free invariant across them. One-way.
 // ======================================================================
 class Runtime
 {
@@ -621,13 +715,27 @@ public:
                     : detail::make_default_executor(opts.threads)),
           observer_(opts.observer
                     ? std::move(opts.observer)
-                    : std::make_unique<ConsoleObserver>())
+                    : std::make_unique<ConsoleObserver>()),
+          driver_index_(index_)
     {
         pump_ = std::thread([this] { pump_loop(); });
     }
 
     ~Runtime()
     {
+        // Lifetime around linked-drive. If we were linked into a driver,
+        // detach so its pump stops touching our now-dying objects. If we ARE
+        // a driver, clear the back-pointer on each linked runtime so their
+        // destructors do not call back into this freed object. Destroying a
+        // driver while it still drives linked runtimes is a lifetime error -
+        // those modules simply stop being pumped.
+        if (driver_)
+            driver_->unlink_(this);
+        {
+            std::lock_guard<std::mutex> lk(linked_mu_);
+            for (Runtime* l : linked_)
+                l->driver_ = nullptr;
+        }
         stop_.store(true, std::memory_order_relaxed);
         if (pump_.joinable())
             pump_.join();
@@ -655,6 +763,124 @@ public:
                        objects_.end());
     }
 
+    // -- Cross-thread function posting --
+    // Post a callback to run on THIS runtime's pump thread. Safe to call
+    // from any thread: another runtime's step, a non-uniflow worker, the
+    // main thread. The pump drains posted callbacks at the top of each round
+    // and runs them on the pump thread, so they may freely touch state owned
+    // by this runtime's modules WITHOUT locks - the single-thread invariant
+    // still holds. Keep the callback short and non-blocking; it runs OUTSIDE
+    // the step/flow model (no trace, no StepResult). For blocking work, have
+    // the callback start a flow or submit to an executor.
+    //
+    // Prefer the UF_POST macro: it tags the call with its source location so
+    // OnPostSubmitted / OnPostExecuted can report where the callback came
+    // from. The bare method posts with a blank call site.
+    void Post(std::function<void()> fn) { PostAt(CallSite{}, std::move(fn)); }
+
+    void PostAt(CallSite caller, std::function<void()> fn)
+    {
+        observer_->OnPostSubmitted(index_, /*blocking=*/false, caller);
+        PostedTask t;
+        t.fn           = std::move(fn);
+        t.caller       = caller;
+        t.blocking     = false;
+        t.submitted_at = Clock::now();
+        std::lock_guard<std::mutex> lk(posted_mu_);
+        posted_.push_back(std::move(t));
+    }
+
+    // Post a callback and block the CALLING thread until the pump runs it,
+    // returning whatever the callback returns via std::future. Use this to
+    // read or mutate state owned by this runtime from outside its pump
+    // thread without locks. Prefer the UF_POST_WAIT macro for caller logging.
+    //
+    // MUST NOT be called from the thread that drives this runtime - the pump
+    // would have to run the task while it is blocked waiting for the result
+    // (deadlock); an assert guards exactly that case. Also avoid calling it
+    // from a step on ANOTHER runtime: it blocks that runtime's pump (and
+    // every module on it) until this pump services the task.
+    template <class F>
+    auto PostAndWait(F&& fn)
+        -> std::future<std::invoke_result_t<std::decay_t<F>>>
+    {
+        return PostAndWaitAt(CallSite{}, std::forward<F>(fn));
+    }
+
+    template <class F>
+    auto PostAndWaitAt(CallSite caller, F&& fn)
+        -> std::future<std::invoke_result_t<std::decay_t<F>>>
+    {
+        assert(detail::t_runtime_idx != driver_index_
+               && "PostAndWait called from the pump thread that drives this "
+                  "runtime - would deadlock");
+        using R   = std::invoke_result_t<std::decay_t<F>>;
+        auto task = std::make_shared<std::packaged_task<R()>>(
+            std::forward<F>(fn));
+        std::future<R> fut = task->get_future();
+        observer_->OnPostSubmitted(index_, /*blocking=*/true, caller);
+        PostedTask t;
+        t.fn           = [task]() { (*task)(); };
+        t.caller       = caller;
+        t.blocking     = true;
+        t.submitted_at = Clock::now();
+        {
+            std::lock_guard<std::mutex> lk(posted_mu_);
+            posted_.push_back(std::move(t));
+        }
+        return fut;
+    }
+
+    // -- Linked-drive: collapse another runtime onto THIS pump thread --
+    // After Link(other), 'other' keeps its own observer / executor / config
+    // and its own module list, but its pump thread is stopped and THIS pump
+    // thread drives its objects (and drains its posted queue) every round.
+    // The two runtimes then share one thread, so modules on either side may
+    // touch shared state without locks. Per-module policy (slow thresholds,
+    // observer, executor) stays each runtime's own; only the pump-sleep
+    // cadence is governed by this (the driver) runtime's Config.
+    //
+    // One-way by design: there is no Unlink. Once flows on the two sides may
+    // have grown cross-dependencies, independence cannot be safely re-
+    // established, so the link is permanent for the lifetime of 'other'.
+    //
+    // Call from a thread that is NOT 'other's pump thread. Flat linking only:
+    // 'other' must not already be linked, and neither runtime may itself be
+    // driving others. Prefer the UF_LINK macro for caller logging.
+    void Link(Runtime& other) { LinkAt(CallSite{}, other); }
+
+    void LinkAt(CallSite caller, Runtime& other)
+    {
+        assert(&other != this && "Link: cannot link a runtime to itself");
+        assert(other.driver_ == nullptr && "Link: 'other' is already linked");
+        assert(driver_ == nullptr
+               && "Link: a linked runtime cannot also be a driver");
+        {
+            std::lock_guard<std::mutex> lk(other.linked_mu_);
+            assert(other.linked_.empty()
+                   && "Link: 'other' is itself a driver - flat linking only");
+        }
+        // Stop other's pump and wait for its current round to finish. join()
+        // returning is the quiescence point: from here no thread drives
+        // other's objects until this pump picks them up on the next round.
+        other.stop_.store(true, std::memory_order_relaxed);
+        if (other.pump_.joinable())
+            other.pump_.join();
+        other.driver_       = this;
+        other.driver_index_ = index_;
+        {
+            std::lock_guard<std::mutex> lk(linked_mu_);
+            linked_.push_back(&other);
+        }
+        observer_->OnLinked(index_, other.index_, caller);
+    }
+
+    // Effective driver-thread index: this runtime's own index normally, or
+    // the driver's index after Link(). Compare against detail::t_runtime_idx
+    // in user asserts to check "am I on the thread allowed to touch this
+    // runtime's modules?".
+    int driver_index() const { return driver_index_; }
+
 private:
     // Outcome of one pump round, in increasing order of 'how busy were
     // we?'. The round walks all modules and only ever UPGRADES this
@@ -680,19 +906,33 @@ private:
             if (stop_.load(std::memory_order_relaxed))
                 return;
             RoundOutcome sleepLevel = RoundOutcome::Idle;
+
+            // Drain posted callbacks first - this runtime, then any linked
+            // ones - so state they change is visible to the steps that run
+            // this round. A drained batch counts as activity so the pump does
+            // not fall back to the long idle nap right after doing work.
+            if (DrainPosted())
+                sleepLevel = RoundOutcome::Advanced;
             {
-                std::lock_guard<std::recursive_mutex> lk(objects_mu_);
-                for (std::size_t i = 0; i < objects_.size(); ++i)
-                {
-                    detail::IUniflowObject* o = objects_[i];
-                    if (o->IsIdle())
-                        continue;
-                    if (sleepLevel == RoundOutcome::Idle)
-                        sleepLevel = RoundOutcome::Staying;
-                    if (o->ExecuteOnce(*observer_))
+                std::lock_guard<std::mutex> lk(linked_mu_);
+                for (Runtime* l : linked_)
+                    if (l->DrainPosted())
                         sleepLevel = RoundOutcome::Advanced;
-                }
             }
+
+            // Drive this runtime's objects, then any linked runtimes' objects
+            // - all on this single pump thread. Each runtime uses its own
+            // observer (RunObjectsOnce reads this->observer_).
+            RunObjectsOnce(sleepLevel);
+            {
+                std::lock_guard<std::mutex> lk(linked_mu_);
+                for (Runtime* l : linked_)
+                    l->RunObjectsOnce(sleepLevel);
+            }
+
+            // Sleep cadence is the driver runtime's Config; linked runtimes
+            // contribute their busiest outcome via the shared sleepLevel but
+            // not their sleep knobs.
             Duration nap_ms;
             switch (sleepLevel)
             {
@@ -705,6 +945,59 @@ private:
         }
     }
 
+    // Run every non-idle object owned by THIS runtime once, folding the
+    // busiest outcome into 'level' (never downgrades). Uses this runtime's
+    // own observer so linked runtimes keep their own logging. Exactly one
+    // thread ever calls this for a given runtime at a time: its own pump, or
+    // - after Link() parked that pump - the driver's pump.
+    void RunObjectsOnce(RoundOutcome& level)
+    {
+        std::lock_guard<std::recursive_mutex> lk(objects_mu_);
+        for (std::size_t i = 0; i < objects_.size(); ++i)
+        {
+            detail::IUniflowObject* o = objects_[i];
+            if (o->IsIdle())
+                continue;
+            if (level == RoundOutcome::Idle)
+                level = RoundOutcome::Staying;
+            if (o->ExecuteOnce(*observer_))
+                level = RoundOutcome::Advanced;
+        }
+    }
+
+    // Run and clear every callback posted to THIS runtime. Swaps the queue
+    // out under the lock and runs the batch outside it, so a callback may
+    // Post() more work (lands in the next round) without re-entering the
+    // lock, and a flood of posts cannot starve module stepping. Returns true
+    // iff at least one callback ran.
+    bool DrainPosted()
+    {
+        std::deque<PostedTask> batch;
+        {
+            std::lock_guard<std::mutex> lk(posted_mu_);
+            if (posted_.empty())
+                return false;
+            batch.swap(posted_);
+        }
+        for (auto& t : batch)
+        {
+            double wait_ms = to_ms(Clock::now() - t.submitted_at);
+            t.fn();
+            observer_->OnPostExecuted(index_, t.blocking, wait_ms, t.caller);
+        }
+        return true;
+    }
+
+    // Remove 'other' from this driver's linked list (called by other's
+    // destructor). Not an Unlink in the logical sense - it only severs the
+    // dangling pointer when a linked runtime dies before its driver.
+    void unlink_(Runtime* other)
+    {
+        std::lock_guard<std::mutex> lk(linked_mu_);
+        linked_.erase(std::remove(linked_.begin(), linked_.end(), other),
+                      linked_.end());
+    }
+
     int                               index_;
     Config                            config_;
     std::unique_ptr<IExecutor>        executor_;
@@ -713,6 +1006,28 @@ private:
     std::recursive_mutex                 objects_mu_;
     std::vector<detail::IUniflowObject*> objects_;
     std::atomic<bool>                    stop_{false};
+
+    // Cross-thread posted callbacks, run on this pump thread each round. Each
+    // carries its caller's source location and submit time so the observer
+    // can report where it came from and how long it queued.
+    struct PostedTask
+    {
+        std::function<void()> fn;
+        CallSite              caller;
+        bool                  blocking = false;
+        TimePoint             submitted_at;
+    };
+    std::mutex                           posted_mu_;
+    std::deque<PostedTask>               posted_;
+
+    // Linked-drive. linked_ = runtimes THIS pump also drives. driver_ is set
+    // (back-pointer) when this runtime has been Link()ed into another;
+    // driver_index_ is the index of the thread that drives our objects (our
+    // own index when standalone, the driver's index once linked).
+    std::mutex                           linked_mu_;
+    std::vector<Runtime*>                linked_;
+    Runtime*                             driver_ = nullptr;
+    int                                  driver_index_;
 
     std::thread                          pump_;
 };
@@ -867,6 +1182,10 @@ public:
 
     const std::string& InstanceName() const { return instance_name_; }
     int                RuntimeIndex() const { return runtime_->index(); }
+    // Index of the thread that drives this module (own runtime normally, the
+    // driver's after Runtime::Link()). Compare to detail::t_runtime_idx in
+    // asserts that guard against off-thread access.
+    int                DriverIndex() const { return runtime_->driver_index(); }
     const std::string& CurrentStepDescription() const { return curr_step_description_; }
 
 protected:
@@ -1362,6 +1681,28 @@ void Uniflow<Derived>::SubmitAsync(const char* job_label, Duration timeout,
         ::uniflow::basename_of(__FILE__), __LINE__, __FUNCTION__,             \
         &std::remove_reference_t<decltype(mod)>::fn,                          \
         ##__VA_ARGS__))
+
+// Source-location capture (file basename / line / function) for the cross-
+// runtime helpers below. Variadic so a callback's capture list commas
+// (e.g. [a, b]{...}) do not split into separate macro arguments.
+#define UF_HERE_                                                              \
+    ::uniflow::CallSite                                                       \
+    {                                                                         \
+        ::uniflow::basename_of(__FILE__), __LINE__, __FUNCTION__             \
+    }
+
+// Post a callback to 'rt's pump thread, tagged with this call site so the
+// observer logs where it came from. Prefer these over the bare methods.
+//
+//   UF_POST(net_rt, [] { ConnectionTable::MarkStale(); });
+//   auto f = UF_POST_WAIT(net_rt, [] { return ConnectionTable::Count(); });
+#define UF_POST(rt, ...)      ((rt).PostAt(UF_HERE_, __VA_ARGS__))
+#define UF_POST_WAIT(rt, ...) ((rt).PostAndWaitAt(UF_HERE_, __VA_ARGS__))
+
+// Link 'other' onto 'driver's pump thread, tagged with this call site.
+//
+//   UF_LINK(rt, sub_rt);
+#define UF_LINK(driver, other) ((driver).LinkAt(UF_HERE_, (other)))
 
 // ======================================================================
 //  BS::thread_pool - bundled in-place (was a separate header).

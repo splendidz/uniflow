@@ -231,7 +231,7 @@ ping pong
 
 `g_log`, `g_turn` 어디에도 mutex 없습니다 — 둘 다 같은 펌프 스레드 위에서만 만져지니까요. (예제 1 [shared_ostream](examples/shared_ostream/) 이 이 패턴의 완성판입니다.)
 
-**경고** — Runtime을 *둘* 만들면 펌프가 둘이 됩니다. 그땐 모듈 사이 공유 자원에 락 필요. 보통은 Runtime 하나로 충분합니다.
+**경고** — Runtime을 *둘* 만들면 펌프가 둘이 됩니다. 그땐 두 펌프 사이의 공유 자원이 다시 멀티스레드 문제가 됩니다. 보통은 Runtime 하나로 충분하고, 정말 나눠야 할 때 둘 사이를 락 없이 잇는 방법(`Post` / `Link`)은 챕터 9에서 다룹니다.
 
 ---
 
@@ -375,6 +375,94 @@ int main() {
 - `OnSlowAsync` — async 작업이 임계값보다 오래 안 끝났을 때
 - `OnStepThrew` — step에서 예외
 - `OnFlowEnded` — flow 종료 (성공·실패 다)
+- `OnPostSubmitted` / `OnPostExecuted` — `Post` / `PostAndWait` 제출·실행 (caller 동반, 챕터 9)
+- `OnLinked` — `Link` 성립 (caller 동반, 챕터 9)
+
+---
+
+## 챕터 9. 여러 Runtime 사이 — Post와 Link
+
+챕터 5에서 "Runtime 둘이면 펌프 둘, 그 사이 공유 자원은 락 필요" 라고 했습니다. 그런데 락을 거는 건 lock-free 라는 이 프레임워크의 전제를 버리는 일입니다. 대신 uniflow는 **접근을 한 펌프 스레드로 모으는** 두 가지 방법을 줍니다.
+
+### Post — 콜백을 상대 펌프로 던지기
+
+다른 runtime(또는 일반 스레드, 비-uniflow 코드)에서 어떤 runtime이 소유한 자원을 만지고 싶을 때, 직접 만지지 말고 콜백을 그 runtime에 `UF_POST` 합니다. 콜백은 그 runtime의 펌프 스레드에서 실행되니까 락이 필요 없습니다.
+
+```cpp
+uniflow::Runtime net_rt;
+// ... net_rt 에 네트워크 모듈들 부착 ...
+
+// main 스레드(또는 다른 runtime)에서:
+UF_POST(net_rt, [] {
+    // 이 람다는 net_rt 의 펌프 스레드에서 실행됨 - 락 불필요
+    ConnectionTable::MarkAllStale();
+});
+```
+
+이게 libuv의 `uv_async_send`, Qt의 `invokeMethod(..., Qt::QueuedConnection)` 과 같은 패턴입니다. 펌프는 매 라운드 맨 앞에서 쌓인 콜백을 비우고 실행합니다.
+
+`UF_POST` 매크로는 호출 위치(파일명·줄·함수)를 자동으로 붙여서 observer 로깅에 넘깁니다. 매크로 없이 `net_rt.Post([]{...})` 로 직접 불러도 되지만, 그러면 로그의 caller 칸이 빕니다. 펌프를 넘나드는 콜백은 스택 트레이스에 안 잡히니, 어디서 던졌는지 로그에 남기려면 매크로 형태를 기본으로 쓰세요.
+
+**규칙** — post된 콜백은 step/flow *밖*에서 도는 raw 콜백입니다. trace도 안 붙어요. 그러니 *짧고 논블로킹* 이어야 합니다. 펌프를 오래 잡으면 그 runtime 전체가 멈춥니다. 블로킹 일이 필요하면 콜백 안에서 `UF_START_FLOW` 로 flow를 켜세요.
+
+### PostAndWait — 값을 받아와야 할 때
+
+읽기가 필요하면 `UF_POST_WAIT`. 콜백이 펌프 스레드에서 실행되고, 호출한 스레드는 결과(`std::future`)를 기다립니다.
+
+```cpp
+std::future<int> f = UF_POST_WAIT(net_rt, [] {
+    return ConnectionTable::Count();   // net_rt 펌프 위에서 안전하게 읽음
+});
+int count = f.get();                   // 호출 스레드는 여기서 블록
+```
+
+**절대 하면 안 되는 것** — 자기 자신을 구동하는 펌프 스레드에서 `UF_POST_WAIT` 부르기. 그 콜백을 실행할 펌프가 지금 결과를 기다리며 블록돼 있으니 영원히 안 풀립니다(데드락). step 본문에서 부르지 마세요 — assert가 잡아줍니다.
+
+### Link — 두 펌프를 하나로 합치기
+
+공유가 너무 잦아서 Post로는 번거로울 때, 아예 두 runtime을 한 펌프 스레드로 합칩니다. `driver.Link(other)` 하면:
+
+- `other` 의 펌프 스레드는 멈추고
+- `driver` 의 펌프가 `other` 의 모듈까지 매 라운드 돌립니다
+- `other` 는 자기 observer / executor / config / 모듈 목록을 *그대로* 유지합니다 (펌프 스레드만 빌려줌)
+
+```cpp
+uniflow::Runtime rt;
+uniflow::Runtime sub_rt;
+
+SomeModule m{sub_rt};                  // 모듈은 sub_rt 소속
+UF_LINK(rt, sub_rt);                   // 하지만 rt 의 펌프가 m 을 구동
+
+UF_START_FLOW(m, OnSomething_Begin);   // rt 펌프 위에서 진행됨
+```
+
+합치고 나면 `rt` 의 모듈과 `sub_rt` 의 모듈이 한 스레드에서 직렬화되니, 둘 사이 공유 자원도 락이 필요 없습니다. 각 모듈의 slow 임계값 / observer / executor 는 자기 runtime 것을 그대로 쓰고, 펌프가 쉬는 주기(sleep cadence)만 driver 의 `Config` 를 따릅니다. `UF_LINK` 역시 호출 위치를 잡아 `OnLinked` observer 콜백에 넘깁니다.
+
+**`Link` 는 단방향입니다** — 한 번 합치면 못 떼어냅니다. 합친 뒤 양쪽 flow가 서로 의존을 만들었을 수 있어서, 어느 모듈을 어느 펌프로 되돌려도 안전한지 알 수 없거든요. 그래서:
+
+> **권장 기본값: Runtime 하나로 시작하세요.** 멀티 펌프는 "독립이 확실하고 + 병렬성이 진짜 필요할 때" 만 의식적으로 고르는 최적화입니다. "나중에 공유할 일 생기면?" 이 떠오른다는 것 자체가 독립이 확실하지 않다는 신호입니다.
+
+### 로깅은 기본으로 남는다
+
+세 동작 모두 observer로 흘러갑니다. 펌프를 넘나드는 제어 흐름은 디버깅이 까다로우니, 기본 `ConsoleObserver`가 caller 위치까지 찍어줍니다:
+
+```
+[rt#0          ] POST SUBMIT                  caller=net_worker.cpp:42 PollLoop()
+[rt#0          ] POST RUN                     queue=0.67ms  caller=net_worker.cpp:42 PollLoop()
+[rt#0          ] LINK                         rt#1 -> rt#0  caller=app.cpp:18 App::Start()
+```
+
+- `OnPostSubmitted` — post한 순간 (호출 스레드에서, caller 동반)
+- `OnPostExecuted` — 펌프가 실제로 실행한 순간 (`queue=` 는 큐에서 기다린 시간)
+- `OnLinked` — link가 성립한 순간
+
+자체 observer를 꽂으면 이 셋을 override 해서 Prometheus / 사내 로그로 보낼 수 있습니다 (챕터 8).
+
+### 언제 무엇을
+
+- 공유가 **가끔** → `UF_POST` / `UF_POST_WAIT` (국소적, 자원 하나만 한쪽 runtime 소유로)
+- 공유가 **핫패스에서 빈번** → `UF_LINK` (두 펌프를 합침)
+- 셋 이상도 → 한 driver 에 여러 개 `UF_LINK` 가능 (flat linking)
 
 ---
 

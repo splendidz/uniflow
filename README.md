@@ -70,7 +70,43 @@ uniflow::Runtime net_rt;      // 네트워크 통신 전용 pump
 uniflow::Runtime device_rt;   // 장비 제어 전용 pump
 ```
 
-각 runtime 내부는 협력형 단일 스레드의 모든 이점(자동 임계 구역, lock 불필요, 결정적 실행 순서)을 그대로 가지며, runtime 사이의 통신은 일반적인 멀티스레드 규칙(thread-safe queue 등)을 따른다. "프레임워크가 단일 스레드에 묶는다"가 아니라 "어디까지를 lock-free 경계로 둘지 사용자가 정한다"가 정확한 표현이다.
+각 runtime 내부는 협력형 단일 스레드의 모든 이점(자동 임계 구역, lock 불필요, 결정적 실행 순서)을 그대로 가진다. "프레임워크가 단일 스레드에 묶는다"가 아니라 "어디까지를 lock-free 경계로 둘지 사용자가 정한다"가 정확한 표현이다.
+
+### runtime 경계를 넘는 자원 접근
+
+pump가 둘 이상이면 그 사이의 공유 자원은 다시 멀티스레드 문제가 된다. 모든 모듈에 락을 거는 것은 lock-free 라는 모델의 전제를 버리는 일이므로, uniflow는 락 대신 **접근을 한 pump 스레드로 모으는** 두 가지 수단을 제공한다.
+
+**(1) `UF_POST` / `UF_POST_WAIT` — 콜백을 상대 pump로 던진다.** 다른 runtime(혹은 비-uniflow 코드, 일반 스레드)에서 어떤 runtime이 소유한 자원을 만져야 할 때, 그 자원을 직접 건드리는 대신 콜백을 해당 runtime에 post한다. 콜백은 그 runtime의 pump 스레드에서 실행되므로 락 없이 안전하다. 이것이 libuv의 `uv_async_send`, Qt의 `invokeMethod(Qt::QueuedConnection)`, Chromium의 `PostTask` 와 같은 패턴이다.
+
+```cpp
+// 다른 스레드에서: net_rt 가 소유한 상태를 안전하게 갱신
+UF_POST(net_rt, [] { ConnectionTable::MarkStale(/* ... */); });
+
+// 값을 회수해야 하면 UF_POST_WAIT - 호출 스레드가 결과를 기다린다
+std::future<int> n = UF_POST_WAIT(net_rt, [] { return ConnectionTable::Count(); });
+int count = n.get();
+```
+
+post된 콜백은 step/flow 모델 *밖*에서 도는 raw 콜백이므로 짧고 논블로킹이어야 한다(pump 독점 금지). `UF_POST_WAIT` 은 자기 자신을 구동하는 pump 스레드에서 부르면 데드락이므로 step 본문에서 호출하지 않는다(assert로 방지). 매크로는 호출 위치(`__FILE__`/`__LINE__`/`__FUNCTION__`)를 자동으로 붙여 observer 로깅에 넘긴다 — 매크로 없는 `net_rt.Post(...)` / `net_rt.PostAndWait(...)` 도 동작하지만 caller 정보는 비게 된다.
+
+**(2) `UF_LINK` — 두 runtime을 한 pump 스레드로 합친다.** 공유가 빈번해서 post로는 부족할 때, 한 runtime을 다른 runtime에 link한다. link되면 상대 runtime은 자신의 observer / executor / config / 모듈 목록을 그대로 유지한 채 **pump 스레드만 driver 쪽으로 넘긴다**. 이후 두 runtime의 모든 step이 단일 스레드에서 직렬화되므로 둘 사이 공유 자원도 락이 필요 없어진다.
+
+```cpp
+uniflow::Runtime rt;
+uniflow::Runtime sub_rt;
+// ... sub_rt 에 모듈 부착 ...
+UF_LINK(rt, sub_rt);   // 이제 rt 의 pump 가 sub_rt 모듈까지 구동
+```
+
+`Link` 는 **단방향**이다 — 한 번 합치면 분리(Unlink)할 수 없다. 합쳐진 뒤 양쪽 flow가 서로 의존을 만들었을 수 있어, 어느 모듈을 어느 pump로 되돌려도 안전한지 프레임워크가 보장할 수 없기 때문이다. 그래서 권장 기본값은 **runtime 하나로 시작**하고, 독립이 확실하며 병렬성이 실제로 필요할 때만 의식적으로 runtime을 쪼개는 것이다. (자세한 패턴은 [TUTORIAL.md 챕터 9](TUTORIAL.md) 참고.)
+
+세 동작 모두 observer를 통해 로깅된다: post는 제출(`OnPostSubmitted`)과 실행(`OnPostExecuted`, queue 대기 시간 포함), link는 `OnLinked` 로 fire되며 각 콜백은 위 매크로가 잡은 caller 위치를 함께 받는다. 기본 `ConsoleObserver` 출력 예:
+
+```
+[rt#0          ] POST SUBMIT                  caller=net_worker.cpp:42 PollLoop()
+[rt#0          ] POST RUN                     queue=0.67ms  caller=net_worker.cpp:42 PollLoop()
+[rt#0          ] LINK                         rt#1 -> rt#0  caller=app.cpp:18 App::Start()
+```
 
 ---
 
@@ -136,6 +172,11 @@ public:
 
     virtual void OnStepThrew   (obj, step, what, ...) {}    // 예외 (pump 밖으로 새지 않음)
     virtual void OnFlowStarted (obj, origin) {}
+
+    // runtime 경계 트래픽 - caller(file/line/function) 동반
+    virtual void OnPostSubmitted(runtime_index, blocking, caller) {} // Post/PostAndWait 제출 (호출 스레드)
+    virtual void OnPostExecuted (runtime_index, blocking, queue_wait_ms, caller) {} // pump에서 실행
+    virtual void OnLinked       (driver_index, linked_index, caller) {} // Link 성립
 };
 
 // Runtime 생성 시 주입
