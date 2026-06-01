@@ -373,10 +373,42 @@ int main() {
 - `OnAsyncSubmitted` / `OnAsyncCompleted` — async 시작/끝
 - `OnSlowCpuStep` — step 본문이 임계값보다 오래 펌프 잡고 있었을 때
 - `OnSlowAsync` — async 작업이 임계값보다 오래 안 끝났을 때
+- `OnSlowRound` — 한 라운드(pump 사이클)가 임계값보다 오래 (아래 "느린 사이클 추적")
 - `OnStepThrew` — step에서 예외
 - `OnFlowEnded` — flow 종료 (성공·실패 다)
 - `OnPostSubmitted` / `OnPostExecuted` — `Post` / `PostAndWait` 제출·실행 (caller 동반, 챕터 9)
 - `OnLinked` — `Link` 성립 (caller 동반, 챕터 9)
+
+### 느린 사이클 추적 — 라운드 프로파일링
+
+step/flow 통계는 "모듈 하나"를 보지만, 가끔 알고 싶은 건 *"펌프 한 바퀴(라운드)가 왜 갑자기 50ms 걸렸지?"* 입니다. 한 라운드 = post 비우기 + 모든 활성 모듈 1회 실행. 라운드 프로파일링이 이걸 봅니다.
+
+```cpp
+uniflow::Runtime::Opts o;
+o.config.slow_round_threshold_ms = std::chrono::milliseconds(20); // 20ms 넘으면 알람
+o.config.trace_rounds            = true;                          // step/post별 분해까지
+uniflow::Runtime rt(std::move(o));
+```
+
+- **라운드 주기 통계** — `rt.GetRoundStats()` → `{count, min_ms, max_ms, avg_ms, last_ms}` (일한 라운드만; idle 폴링 제외).
+- **피크 리셋** — `max_ms` 가 피크. `rt.ResetRoundStats()` 로 초기화.
+- **헤비 트레이스 on/off** — `rt.SetRoundTracing(true/false)`. 켜야 아래 `segments` 분해가 채워지고, 꺼져 있으면 라운드 길이(`busy_ms`)만 가볍게 받습니다. 런타임 토글 가능.
+- **느린 사이클 알람** — 임계값 초과 시 `OnSlowRound(runtime_index, profile)`:
+
+```cpp
+void OnSlowRound(int rt_index, const uniflow::RoundProfile& p) override {
+    // p.busy_ms        : 이 라운드 총 작업 시간
+    // p.segments[i]    : { kind(Step/Post), obj, label, ms }  <- 범인 즉시 식별
+    for (const auto& s : p.segments) { /* 가장 긴 ms 가 범인 */ }
+}
+```
+
+기본 `ConsoleObserver` 가 찍어주는 모습:
+```
+[rt#0          ] [SLOW ROUND]  busy=52.10ms  segments=2
+                 Step  Stage          OnProcess_WaitHwReady        48.30ms
+                 Post  rt#0           net.cpp:88 OnPoll()           3.80ms
+```
 
 ---
 

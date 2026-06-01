@@ -115,6 +115,66 @@ std::vector<int> g_order;
 int              g_counter = 0;
 } // namespace shared
 
+// Holds the pump thread for ~15ms in a single step - simulates the "a whole
+// cycle suddenly took long" scenario the round profiler is meant to catch.
+// Busy-waits rather than sleeps so the time is real pump-thread work.
+class SlowStep : public uniflow::Uniflow<SlowStep>
+{
+    UF_UNIFLOW_IMPLEMENT(SlowStep);
+
+public:
+    explicit SlowStep(uniflow::Runtime& rt) : uniflow::Uniflow<SlowStep>(rt) {}
+
+    StepResult OnSlow_Begin()
+    {
+        const auto t0 = uniflow::Clock::now();
+        while (uniflow::Clock::now() - t0 < std::chrono::milliseconds(15))
+        {
+            // spin - deliberately monopolise the pump
+        }
+        return Done();
+    }
+};
+
+// Trivial fast flow used to generate fresh, sub-millisecond rounds after a
+// stats reset.
+class FastStep : public uniflow::Uniflow<FastStep>
+{
+    UF_UNIFLOW_IMPLEMENT(FastStep);
+
+public:
+    explicit FastStep(uniflow::Runtime& rt) : uniflow::Uniflow<FastStep>(rt) {}
+
+    StepResult OnFast_Begin() { return Done(); }
+};
+
+// Captures the slow-round report so a test can prove the culprit segment is
+// named with its duration.
+class RoundObserver : public uniflow::IUniflowObserver
+{
+public:
+    std::mutex  mu;
+    int         slow_rounds   = 0;
+    double      last_busy_ms  = 0.0;
+    int         last_segments = 0;
+    std::string last_step_obj;
+    double      last_step_ms = 0.0;
+
+    void OnSlowRound(int, const uniflow::RoundProfile& p) override
+    {
+        std::lock_guard<std::mutex> lk(mu);
+        ++slow_rounds;
+        last_busy_ms  = p.busy_ms;
+        last_segments = static_cast<int>(p.segments.size());
+        for (const auto& s : p.segments)
+            if (s.kind == uniflow::RoundSegment::Kind::Step)
+            {
+                last_step_obj = s.obj;
+                last_step_ms  = s.ms;
+            }
+    }
+};
+
 // Records the thread it runs on, then counts a shared int up to 'target'.
 class Counter : public uniflow::Uniflow<Counter>
 {
@@ -302,6 +362,58 @@ int main()
         check(line > 0, "post caller line captured");
         check(sfunc == "main", "post caller function captured");
         check(lfile == "main.cpp", "link caller file basename captured");
+    }
+
+    // ---- Test 8: slow-round profiling + round stats + reset ----
+    {
+        std::cout << "Test 8: slow-round profiling reports the culprit + stats reset\n";
+        auto           obs_owned = std::make_unique<RoundObserver>();
+        RoundObserver* obs       = obs_owned.get();
+        uniflow::Runtime::Opts od;
+        od.observer                       = std::move(obs_owned);
+        od.config.slow_round_threshold_ms = std::chrono::milliseconds(5);
+        od.config.trace_rounds            = true; // heavy per-segment tracing on
+        uniflow::Runtime rt(std::move(od));
+
+        SlowStep s{rt};
+        UF_START_FLOW(s, OnSlow_Begin);
+        s.WaitUntilIdle();
+        // Barrier: a post runs in a round AFTER the slow round, guaranteeing
+        // the slow round's RecordRound (stats + OnSlowRound) has completed
+        // before we read anything.
+        rt.PostAndWait([] { return 0; }).get();
+
+        int         slow, segs;
+        double      busy, sms;
+        std::string sobj;
+        {
+            std::lock_guard<std::mutex> lk(obs->mu);
+            slow = obs->slow_rounds;
+            busy = obs->last_busy_ms;
+            segs = obs->last_segments;
+            sobj = obs->last_step_obj;
+            sms  = obs->last_step_ms;
+        }
+        uniflow::RoundStats st = rt.GetRoundStats();
+
+        check(slow >= 1, "OnSlowRound fired for the slow cycle");
+        check(busy >= 10.0, "slow-round busy time captured (>=10ms)");
+        check(segs >= 1 && !sobj.empty(), "per-segment breakdown populated");
+        check(sobj == "SlowStep", "culprit segment names the module");
+        check(sms >= 10.0, "culprit step duration captured (>=10ms)");
+        check(st.max_ms >= 10.0, "round stats max captured the peak");
+        check(st.count >= 1, "round stats counted the work round");
+
+        // Reset clears the peak; subsequent activity is all sub-millisecond,
+        // so the recorded max must drop well below the 15ms spike.
+        rt.ResetRoundStats();
+        FastStep f{rt};
+        UF_START_FLOW(f, OnFast_Begin);
+        f.WaitUntilIdle();
+        rt.PostAndWait([] { return 0; }).get(); // barrier
+
+        uniflow::RoundStats after = rt.GetRoundStats();
+        check(after.max_ms < 5.0, "ResetRoundStats cleared the 15ms peak");
     }
 
     std::cout << "\n=== " << (g_checks - g_failures) << "/" << g_checks

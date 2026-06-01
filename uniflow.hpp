@@ -210,6 +210,47 @@ struct FlowStats
     std::size_t fail_count          = 0;
 };
 
+// ----- Per-round (pump cycle) profiling -----
+// A pump round = one pass of the pump loop: drain posted callbacks, then run
+// every active module once. When a round runs long (a step or post hogged the
+// single pump thread), these structures explain which segment cost what.
+
+// One timed unit of work inside a round: a step body invocation or a posted
+// callback. 'ms' is the wall time that segment held the pump thread.
+struct RoundSegment
+{
+    enum class Kind { Step, Post };
+    Kind        kind = Kind::Step;
+    std::string obj;    // module instance name (Step), or "rt#N" (Post)
+    std::string label;  // step name (Step), or caller "file:line fn()" (Post)
+    double      ms = 0.0;
+};
+
+// Breakdown of a single pump round, handed to OnSlowRound. 'segments' is
+// filled only when round tracing is enabled (Runtime::SetRoundTracing);
+// without it you still get 'busy_ms' (the round's total work time) but no
+// per-segment detail - a cheap "a slow round happened" signal.
+struct RoundProfile
+{
+    int                       runtime_index = -1;
+    double                    busy_ms       = 0.0; // round work time (no sleep)
+    int                       segment_count = 0;
+    std::vector<RoundSegment> segments;
+};
+
+// Running stats over pump rounds that actually did work (pure idle polling
+// rounds are not counted). min/max/avg describe the round work-time
+// distribution; 'last' is the most recent round. Read via
+// Runtime::GetRoundStats, cleared (peak reset) via Runtime::ResetRoundStats.
+struct RoundStats
+{
+    std::size_t count   = 0;
+    double      min_ms  = 0.0;
+    double      max_ms  = 0.0;
+    double      avg_ms  = 0.0;
+    double      last_ms = 0.0;
+};
+
 // Origin record: where in the source did StartFlow get called?
 // Captured by the UF_START_FLOW macro (basename(__FILE__) / __LINE__ /
 // __FUNCTION__) and threaded through OnFlowStarted / OnFlowEnded so logs
@@ -248,6 +289,19 @@ struct CallSite
     int         line     = 0;
     const char* function = nullptr; // __FUNCTION__ of the caller
 };
+
+// "file:line function()" for logs, or "(no caller)" when blank (the bare
+// Post / PostAndWait / Link methods were used without a UF_ macro).
+inline std::string to_string(CallSite c)
+{
+    if (!c.file)
+        return "(no caller)";
+    std::ostringstream os;
+    os << c.file << ":" << c.line;
+    if (c.function)
+        os << " " << c.function << "()";
+    return os.str();
+}
 
 // Every log line / metric the framework produces is funnelled through one of
 // these hooks - the framework itself never touches std::cout. Subclass and
@@ -340,6 +394,15 @@ public:
     virtual void OnSlowAsync([[maybe_unused]] std::string_view obj,
                              [[maybe_unused]] std::string_view job,
                              [[maybe_unused]] double wait_so_far_ms) {}
+
+    // Fired at the end of a pump round whose work time exceeded
+    // Config::slow_round_threshold_ms. 'profile.busy_ms' is the round's total
+    // work time (no inter-round sleep); 'profile.segments' lists each step /
+    // post that ran THIS round with its duration - but only when round
+    // tracing is on (Runtime::SetRoundTracing). Answers "a 50ms cycle
+    // happened - which step or post caused it?". Called on the pump thread.
+    virtual void OnSlowRound([[maybe_unused]] int runtime_index,
+                             [[maybe_unused]] const RoundProfile& profile) {}
 
     // Fired once when a flow leaves the running state via Done or Fail.
     //   'terminal_action'    - Done or Fail
@@ -493,6 +556,21 @@ public:
                   << "[SLOW ASYNC]  " << job
                   << "  pending=" << fmt_ms(wait_so_far_ms) << "\n";
     }
+    void OnSlowRound(int runtime_index, const RoundProfile& profile) override
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        std::cout << "[" << pad(rt_label(runtime_index), kColObj) << "] "
+                  << "[SLOW ROUND]  busy=" << fmt_ms(profile.busy_ms)
+                  << "  segments=" << profile.segment_count;
+        if (profile.segments.empty())
+            std::cout << "  (enable round tracing for the per-segment breakdown)";
+        std::cout << "\n";
+        for (const RoundSegment& s : profile.segments)
+            std::cout << "                 "
+                      << pad(s.kind == RoundSegment::Kind::Step ? "Step" : "Post", 5)
+                      << " " << pad(s.obj, kColObj) << " "
+                      << pad(s.label, kColStep) << " " << fmt_ms(s.ms) << "\n";
+    }
     void OnFlowEnded(std::string_view obj, StepAction terminal_action,
                      int final_step_ordinal,
                      const std::vector<TraceEntry>& /*trace*/,
@@ -624,6 +702,19 @@ struct Config
     // time the job's in-flight time crosses this. Default disabled - opt
     // in by setting a finite value when you actually care.
     Duration slow_async_threshold_ms = Duration::max();
+
+    // OnSlowRound alarm threshold. A pump round (drain posts + run every
+    // active module once) whose work time exceeds this fires OnSlowRound.
+    // Default disabled. The per-segment breakdown in the report requires
+    // round tracing to be on (see trace_rounds / Runtime::SetRoundTracing).
+    Duration slow_round_threshold_ms = Duration::max();
+
+    // Initial state of heavy per-round tracing: per-step / per-post timing
+    // collected into the OnSlowRound breakdown. Off by default because it
+    // allocates a small record per active segment each round. The cheap
+    // round-duration stats (GetRoundStats) are collected regardless. Toggle
+    // at runtime with Runtime::SetRoundTracing.
+    bool trace_rounds = false;
 };
 
 // ----- detail: hidden machinery -----
@@ -655,7 +746,9 @@ public:
     // ran AND its result was a transition (Next / Done / Fail). Stay
     // results and gated-on-async both return false so the pump can decide
     // to sleep idle_sleep_ms / stay_sleep_ms when nothing advanced.
-    virtual bool ExecuteOnce(IUniflowObserver&) = 0;
+    // 'prof' (when non-null) collects this tick's step timing into the
+    // current round's profile for OnSlowRound; null when round tracing is off.
+    virtual bool ExecuteOnce(IUniflowObserver&, RoundProfile* prof) = 0;
 };
 
 // Forward-declared factory; defined at the bottom of this header, after the
@@ -718,6 +811,7 @@ public:
                     : std::make_unique<ConsoleObserver>()),
           driver_index_(index_)
     {
+        trace_rounds_.store(config_.trace_rounds, std::memory_order_relaxed);
         pump_ = std::thread([this] { pump_loop(); });
     }
 
@@ -881,6 +975,44 @@ public:
     // runtime's modules?".
     int driver_index() const { return driver_index_; }
 
+    // -- Per-round (pump cycle) monitoring --
+    // Toggle heavy per-round tracing: per-step / per-post timing captured into
+    // the OnSlowRound breakdown. The cheap round-duration stats below are
+    // collected either way; this only controls the per-segment detail. Safe
+    // to flip from any thread at runtime.
+    void SetRoundTracing(bool on)
+    {
+        trace_rounds_.store(on, std::memory_order_relaxed);
+    }
+    bool RoundTracingEnabled() const
+    {
+        return trace_rounds_.load(std::memory_order_relaxed);
+    }
+
+    // Snapshot of pump-round work-time stats (rounds that did work only;
+    // idle polling rounds are excluded). Thread-safe.
+    RoundStats GetRoundStats() const
+    {
+        std::lock_guard<std::mutex> lk(round_mu_);
+        RoundStats s;
+        s.count   = round_count_;
+        s.min_ms  = round_count_ ? round_min_ : 0.0;
+        s.max_ms  = round_count_ ? round_max_ : 0.0;
+        s.avg_ms  = round_count_
+                        ? round_sum_ / static_cast<double>(round_count_)
+                        : 0.0;
+        s.last_ms = round_last_;
+        return s;
+    }
+
+    // Clear the round stats - in particular resets the max peak. Thread-safe.
+    void ResetRoundStats()
+    {
+        std::lock_guard<std::mutex> lk(round_mu_);
+        round_count_ = 0;
+        round_min_ = round_max_ = round_sum_ = round_last_ = 0.0;
+    }
+
 private:
     // Outcome of one pump round, in increasing order of 'how busy were
     // we?'. The round walks all modules and only ever UPGRADES this
@@ -907,28 +1039,44 @@ private:
                 return;
             RoundOutcome sleepLevel = RoundOutcome::Idle;
 
+            // Per-round profiling. The busy timer wraps the work portion
+            // (drains + module runs) only, never the inter-round sleep. The
+            // per-segment sink is allocated only when heavy tracing is on; the
+            // round-duration stats are recorded regardless.
+            const bool    tracing = trace_rounds_.load(std::memory_order_relaxed);
+            RoundProfile  prof;
+            prof.runtime_index    = index_;
+            RoundProfile* sink    = tracing ? &prof : nullptr;
+            const TimePoint round_t0 = Clock::now();
+
             // Drain posted callbacks first - this runtime, then any linked
             // ones - so state they change is visible to the steps that run
             // this round. A drained batch counts as activity so the pump does
             // not fall back to the long idle nap right after doing work.
-            if (DrainPosted())
+            if (DrainPosted(sink))
                 sleepLevel = RoundOutcome::Advanced;
             {
                 std::lock_guard<std::mutex> lk(linked_mu_);
                 for (Runtime* l : linked_)
-                    if (l->DrainPosted())
+                    if (l->DrainPosted(sink))
                         sleepLevel = RoundOutcome::Advanced;
             }
 
             // Drive this runtime's objects, then any linked runtimes' objects
             // - all on this single pump thread. Each runtime uses its own
             // observer (RunObjectsOnce reads this->observer_).
-            RunObjectsOnce(sleepLevel);
+            RunObjectsOnce(sleepLevel, sink);
             {
                 std::lock_guard<std::mutex> lk(linked_mu_);
                 for (Runtime* l : linked_)
-                    l->RunObjectsOnce(sleepLevel);
+                    l->RunObjectsOnce(sleepLevel, sink);
             }
+
+            // Record round stats + slow-round alarm, but only for rounds that
+            // did work; pure idle polling rounds (busy ~0) would swamp the
+            // stats and mean nothing.
+            if (sleepLevel != RoundOutcome::Idle)
+                RecordRound(Clock::now() - round_t0, prof);
 
             // Sleep cadence is the driver runtime's Config; linked runtimes
             // contribute their busiest outcome via the shared sleepLevel but
@@ -950,7 +1098,7 @@ private:
     // own observer so linked runtimes keep their own logging. Exactly one
     // thread ever calls this for a given runtime at a time: its own pump, or
     // - after Link() parked that pump - the driver's pump.
-    void RunObjectsOnce(RoundOutcome& level)
+    void RunObjectsOnce(RoundOutcome& level, RoundProfile* prof)
     {
         std::lock_guard<std::recursive_mutex> lk(objects_mu_);
         for (std::size_t i = 0; i < objects_.size(); ++i)
@@ -960,7 +1108,7 @@ private:
                 continue;
             if (level == RoundOutcome::Idle)
                 level = RoundOutcome::Staying;
-            if (o->ExecuteOnce(*observer_))
+            if (o->ExecuteOnce(*observer_, prof))
                 level = RoundOutcome::Advanced;
         }
     }
@@ -970,7 +1118,7 @@ private:
     // Post() more work (lands in the next round) without re-entering the
     // lock, and a flood of posts cannot starve module stepping. Returns true
     // iff at least one callback ran.
-    bool DrainPosted()
+    bool DrainPosted(RoundProfile* prof)
     {
         std::deque<PostedTask> batch;
         {
@@ -981,11 +1129,54 @@ private:
         }
         for (auto& t : batch)
         {
-            double wait_ms = to_ms(Clock::now() - t.submitted_at);
+            double          wait_ms = to_ms(Clock::now() - t.submitted_at);
+            const TimePoint run_t0  = Clock::now();
             t.fn();
+            Clock::duration run_dt = Clock::now() - run_t0;
             observer_->OnPostExecuted(index_, t.blocking, wait_ms, t.caller);
+            if (prof)
+            {
+                RoundSegment seg;
+                seg.kind  = RoundSegment::Kind::Post;
+                seg.obj   = "rt#" + std::to_string(index_);
+                seg.label = uniflow::to_string(t.caller);
+                seg.ms    = to_ms(run_dt);
+                prof->segments.push_back(std::move(seg));
+            }
         }
         return true;
+    }
+
+    // Fold one completed work round into the stats and, if it crossed the
+    // slow-round threshold, emit OnSlowRound with the profile (segments only
+    // populated when tracing was on). Stats use a first-sample init so no
+    // <limits> sentinel is needed.
+    void RecordRound(Clock::duration dt, RoundProfile& prof)
+    {
+        double ms = to_ms(dt);
+        {
+            std::lock_guard<std::mutex> lk(round_mu_);
+            if (round_count_ == 0)
+            {
+                round_min_ = ms;
+                round_max_ = ms;
+            }
+            else
+            {
+                if (ms < round_min_) round_min_ = ms;
+                if (ms > round_max_) round_max_ = ms;
+            }
+            ++round_count_;
+            round_sum_ += ms;
+            round_last_ = ms;
+        }
+        if (config_.slow_round_threshold_ms != Duration::max()
+            && dt > config_.slow_round_threshold_ms)
+        {
+            prof.busy_ms       = ms;
+            prof.segment_count = static_cast<int>(prof.segments.size());
+            observer_->OnSlowRound(index_, prof);
+        }
     }
 
     // Remove 'other' from this driver's linked list (called by other's
@@ -1028,6 +1219,17 @@ private:
     std::vector<Runtime*>                linked_;
     Runtime*                             driver_ = nullptr;
     int                                  driver_index_;
+
+    // Per-round (pump cycle) monitoring. trace_rounds_ gates the heavy
+    // per-segment capture; the duration stats below are always collected
+    // (under round_mu_) for rounds that did work.
+    std::atomic<bool>                    trace_rounds_{false};
+    mutable std::mutex                   round_mu_;
+    std::size_t                          round_count_ = 0;
+    double                               round_min_   = 0.0;
+    double                               round_max_   = 0.0;
+    double                               round_sum_   = 0.0;
+    double                               round_last_  = 0.0;
 
     std::thread                          pump_;
 };
@@ -1115,7 +1317,7 @@ public:
         std::lock_guard<std::mutex> lk(op_mu_);
         return !flow_running_;
     }
-    bool ExecuteOnce(IUniflowObserver& obs) override;
+    bool ExecuteOnce(IUniflowObserver& obs, RoundProfile* prof) override;
 
     // -- Public control surface --
 
@@ -1343,7 +1545,7 @@ private:
 // ----- Uniflow<Derived>: out-of-line definitions -----
 
 template <class Derived>
-bool Uniflow<Derived>::ExecuteOnce(IUniflowObserver& obs)
+bool Uniflow<Derived>::ExecuteOnce(IUniflowObserver& obs, RoundProfile* prof)
 {
     std::lock_guard<std::mutex> lk(op_mu_);
 
@@ -1470,6 +1672,18 @@ bool Uniflow<Derived>::ExecuteOnce(IUniflowObserver& obs)
     {
         flow_tick_max_      = cpu_dt;
         flow_tick_max_step_ = step_name;
+    }
+
+    // Round profiling: record this step body as a segment of the current
+    // pump round (only when heavy tracing armed this round's sink).
+    if (prof)
+    {
+        RoundSegment seg;
+        seg.kind  = RoundSegment::Kind::Step;
+        seg.obj   = instance_name_;
+        seg.label = step_name ? step_name : "(entry)";
+        seg.ms    = to_ms(cpu_dt);
+        prof->segments.push_back(std::move(seg));
     }
 
     // Slow-cpu alarm: fire when this single body invocation held the

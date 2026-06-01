@@ -164,6 +164,7 @@ public:
     // 임계 알람 - threshold를 넘는 순간만 fire
     virtual void OnSlowCpuStep (obj, step, cpu_ms) {}       // 단일 step이 pump를 너무 오래 점유
     virtual void OnSlowAsync   (obj, job, wait_so_far_ms) {} // async가 너무 오래 미결
+    virtual void OnSlowRound   (runtime_index, profile) {}   // 한 라운드(사이클)가 너무 오래 - step/post별 분해 포함
 
     // flow 결산
     virtual void OnFlowEnded   (obj, terminal_action,
@@ -198,6 +199,33 @@ uniflow::Runtime rt{ uniflow::Runtime::Opts{
 - **특정 흐름이 멈췄다** → 마지막으로 진입한 step과 거기서 머문 시간만으로 hang 위치를 정확히 짚을 수 있다.
 
 multi-thread 환경에서 보통 별도 APM 도구나 sampling profiler가 담당하던 일을 — 심지어 그 도구들이 잘 포착하지 못하는 *"코드는 돌고 있는데 일은 진행이 안 됨"* 상태까지 포함하여 — 프레임워크 자체가 의미 있는 단위(step) 기준으로 제공한다.
+
+### 사이클(라운드) 단위 프로파일링
+
+step/flow 통계가 "모듈 하나의 흐름"을 본다면, **라운드 프로파일링은 pump의 한 사이클 전체**를 본다. 한 라운드 = pump 루프 한 바퀴(post 비우기 + 모든 활성 모듈 1회 실행). "어떤 한 사이클이 갑자기 50ms 걸렸다" 는 상황을 정확히 겨냥한다.
+
+- **라운드 주기 통계** — `rt.GetRoundStats()` 가 일을 한 라운드들의 작업 시간 분포를 돌려준다: `count / min_ms / max_ms / avg_ms / last_ms`. 순수 idle 폴링 라운드는 제외되므로 의미 있는 "바쁜 사이클" 분포만 잡힌다.
+- **peak 리셋** — `max_ms` 는 피크다. `rt.ResetRoundStats()` 로 누적 통계(특히 max 피크)를 초기화한다.
+- **느린 사이클 알람 + 분해** — `Config::slow_round_threshold_ms` 를 넘는 라운드가 생기면 `OnSlowRound(runtime_index, profile)` 가 fire된다. `profile.busy_ms` 는 그 라운드의 총 작업 시간이고, `profile.segments` 는 그 라운드에서 돈 **각 step / post 가 각각 몇 ms** 걸렸는지의 목록이다 — 50ms 사이클의 범인을 한눈에 짚는다.
+- **헤비 트레이스 on/off** — 매 라운드 step/post별 타이밍을 모으는 건 비싸므로 기본 꺼짐이다. `rt.SetRoundTracing(true)` (또는 `Config::trace_rounds`)로 켜면 `segments` 분해가 채워지고, 꺼져 있으면 `busy_ms`(라운드 길이)만 가벼운 알람으로 받는다. 런타임 중 토글 가능.
+
+```cpp
+uniflow::Runtime::Opts o;
+o.config.slow_round_threshold_ms = std::chrono::milliseconds(20); // 20ms 넘는 사이클 알람
+o.config.trace_rounds            = true;                          // step/post별 분해까지
+uniflow::Runtime rt(std::move(o));
+// ...
+uniflow::RoundStats st = rt.GetRoundStats();   // 현재 라운드 주기 avg/min/max
+rt.ResetRoundStats();                          // 피크 리셋
+```
+
+기본 `ConsoleObserver` 출력 예 (트레이스 on):
+
+```
+[rt#0          ] [SLOW ROUND]  busy=52.10ms  segments=2
+                 Step  Stage          OnProcess_WaitHwReady        48.30ms
+                 Post  rt#0           net.cpp:88 OnPoll()           3.80ms
+```
 
 ---
 
