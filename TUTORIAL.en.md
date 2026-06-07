@@ -1,8 +1,10 @@
 # uniflow Tutorial
 
-> 🌐 Language: **English** · [한국어](TUTORIAL.md)
+> 🌐 Language: **English** | [한국어](TUTORIAL.md)
 
-One concept per chapter. Each chapter gives you a *complete, compilable* chunk of code. After all 8 chapters, anything under [examples/](examples/) will read naturally.
+One concept per chapter. Each chapter gives you a *complete, compilable* chunk of code. After the 9 chapters plus the final orchestration section, anything under [examples/](examples/) will read naturally.
+
+> New here? Read the 3 quick tutorials in the [README](README.en.md) first (round-robin / async / observer). This document is the next step.
 
 We'll pretend each chapter's code lives at `tutorial/chapNN.cpp`. To build:
 
@@ -21,7 +23,7 @@ g++ -std=c++17 -O2 -pthread -I . tutorial/chap01.cpp -o chap01
 
 ## Chapter 1. A one-step module
 
-The smallest uniflow module — one step function, one `Done()`. That's it.
+The smallest uniflow module - one step function, one `Done()`. That's it.
 
 ```cpp
 #include "uniflow.hpp"
@@ -57,11 +59,11 @@ hello from a step
 
 **What just happened**
 - `Runtime` spun up one pump thread.
-- `Hello h{rt};` attached the module — the pump visits `h` every round from now on.
+- `Hello h{rt};` attached the module - the pump visits `h` every round from now on.
 - `UF_START_FLOW(h, OnHello_Begin)` armed the flow. The step gets called on the next round.
 - The step returned `Done()`, so the module goes back to idle.
 
-**One thing to remember** — *never* call `std::this_thread::sleep_for` (or any other blocking call) inside a step body. The entire pump pauses for that long. Use `Stay()` (next chapter) or `UF_ASYNC` (chapter 6) instead.
+**One thing to remember** - *never* call `std::this_thread::sleep_for` (or any other blocking call) inside a step body. The entire pump pauses for that long. Use `Stay()` (next chapter) or `UF_ASYNC` (chapter 6) instead.
 
 ---
 
@@ -100,9 +102,9 @@ int main() {
 }
 ```
 
-**Why chop a flow into steps** — because step boundaries are exactly where you'll want to hook in a callback or an async result. When a step kicks off a 1-second job, it returns immediately with `UF_ASYNC`, and the *next* step picks up the result. The pump keeps running other modules in between.
+**Why chop a flow into steps** - because step boundaries are exactly where you'll want to hook in a callback or an async result. When a step kicks off a 1-second job, it returns immediately with `UF_ASYNC`, and the *next* step picks up the result. The pump keeps running other modules in between.
 
-**Entry steps are public** — outside callers (like `UF_START_FLOW`) need them. Middle steps are typically private, since they belong to this module's internal flow.
+**Entry steps are public** - outside callers (like `UF_START_FLOW`) need them. Middle steps are typically private, since they belong to this module's internal flow.
 
 ---
 
@@ -137,11 +139,11 @@ private:
 };
 ```
 
-**What `Stay()` is for** — polling a hardware flag, waiting for another module's state to change, "wait until condition true". For *actual blocking work* (network/disk/long compute), use `UF_ASYNC` instead.
+**What `Stay()` is for** - polling a hardware flag, waiting for another module's state to change, "wait until condition true". For *actual blocking work* (network/disk/long compute), use `UF_ASYNC` instead.
 
 ---
 
-## Chapter 4. `Describe` — a one-liner for debugging
+## Chapter 4. `Describe` - a one-liner for debugging
 
 When each step writes a short "what am I doing right now" to the observer/log, debugging gets a lot easier. `Describe(...)` produces that line.
 
@@ -230,13 +232,13 @@ ping pong
 ping pong
 ```
 
-Neither `g_log` nor `g_turn` has a mutex — they're only touched from the same pump thread. ([Example 1: shared_ostream](examples/shared_ostream/) is the polished version of this pattern.)
+Neither `g_log` nor `g_turn` has a mutex - they're only touched from the same pump thread. ([Example 1: shared_ostream](examples/shared_ostream/) is the polished version of this pattern.)
 
-**Warning** — if you create *two* Runtimes you get two pump threads. At that point shared state between modules on different Runtimes does need synchronisation. Usually one Runtime is plenty.
+**Warning** - if you create *two* Runtimes you get two pump threads. At that point shared state between modules on different Runtimes does need synchronisation. Usually one Runtime is plenty.
 
 ---
 
-## Chapter 6. Real blocking work — `UF_ASYNC`
+## Chapter 6. Real blocking work - `UF_ASYNC`
 
 What if you call a 5-second HTTP request directly inside a step body? The pump freezes for 5 seconds, which means every other module freezes too. Don't do that.
 
@@ -277,11 +279,11 @@ private:
 };
 ```
 
-**Why must it be static** — while the work runs on a pool thread, the module might be running other steps on the pump thread. Touching member variables from both would race. So static is enforced, and you pass the data the worker needs *by copy* (`url_` was copied into the argument).
+**Why must it be static** - while the work runs on a pool thread, the module might be running other steps on the pump thread. Touching member variables from both would race. So static is enforced, and you pass the data the worker needs *by copy* (`url_` was copied into the argument).
 
-Read the result with `AsyncResult<T>()` — only valid in the *follow-up step*. A single step can't fire two `UF_ASYNC`s in parallel (only one in-flight at a time per module).
+Read the result with `AsyncResult<T>()` - only valid in the *follow-up step*. A single step can't fire two `UF_ASYNC`s in parallel (only one in-flight at a time per module).
 
-**Observability** — it all shows up in the console automatically:
+**Observability** - it all shows up in the console automatically:
 ```
 [Fetcher       ] (entry)                ASYNC SUBMIT  DoHttpGet
 [Fetcher       ] (entry) -> OnFetch_Done ...
@@ -293,7 +295,7 @@ Read the result with `AsyncResult<T>()` — only valid in the *follow-up step*. 
 
 ## Chapter 7. Timeouts / errors / handling failure
 
-`UF_ASYNC_TIMEOUT(fn, dur, args...)` — async with a deadline.
+`UF_ASYNC_TIMEOUT(fn, dur, args...)` - async with a deadline.
 
 ```cpp
 using namespace std::chrono_literals;
@@ -321,11 +323,11 @@ StepResult OnQuery_After() {
 ```
 
 **The three states of `AsyncRef<T>`**:
-- `is_timeout()` true — deadline missed
-- `failed()` true — worker threw an exception; `exception()` holds the ptr
-- both false — `value()` is valid
+- `is_timeout()` true - deadline missed
+- `failed()` true - worker threw an exception; `exception()` holds the ptr
+- both false - `value()` is valid
 
-**What if a step body throws an exception?** — by default, the whole process tears down (`std::terminate`). To survive instead, override `CatchStepExceptions()` on your module to return `true`:
+**What if a step body throws an exception?** - by default, the whole process tears down (`std::terminate`). To survive instead, override `CatchStepExceptions()` on your module to return `true`:
 
 ```cpp
 class SoftFail : public uniflow::Uniflow<SoftFail> {
@@ -341,7 +343,7 @@ public:
 
 ## Chapter 8. Swapping the observer
 
-The default observer (`ConsoleObserver`) prints step transitions, async start/end, slow-step alarms — nicely formatted to stdout. When you need something fancier — also write to a file, ship to a log server, emit metrics — derive from `IUniflowObserver` and plug it into the Runtime.
+The default observer (`ConsoleObserver`) prints step transitions, async start/end, slow-step alarms - nicely formatted to stdout. When you need something fancier - also write to a file, ship to a log server, emit metrics - derive from `IUniflowObserver` and plug it into the Runtime.
 
 ```cpp
 class MyObserver : public uniflow::IUniflowObserver {
@@ -371,17 +373,17 @@ int main() {
 [examples/cnc_pickers/env_log_observer.h](examples/cnc_pickers/env_log_observer.h) is a real-world example that mirrors output to both stdout and a file.
 
 **Available hooks**:
-- `OnFlowStarted` — flow begins
-- `OnStepChanged` — step transitioned (most frequent)
-- `OnAsyncSubmitted` / `OnAsyncCompleted` — async start / end
-- `OnSlowCpuStep` — a step held the pump longer than threshold
-- `OnSlowAsync` — an async job stayed in flight longer than threshold
-- `OnStepThrew` — a step threw an exception
-- `OnFlowEnded` — flow ended (success or failure)
+- `OnFlowStarted` - flow begins
+- `OnStepChanged` - step transitioned (most frequent)
+- `OnAsyncSubmitted` / `OnAsyncCompleted` - async start / end
+- `OnSlowCpuStep` - a step held the pump longer than threshold
+- `OnSlowAsync` - an async job stayed in flight longer than threshold
+- `OnStepThrew` - a step threw an exception
+- `OnFlowEnded` - flow ended (success or failure)
 
 ---
 
-## Putting it all together — orchestration
+## Putting it all together - orchestration
 
 The pattern for a module that decides *what other modules should do next*, in what order, is what we'll call an "orchestrator". Typically it's one flow (`On*_Tick`) that loops forever, and each round it looks at `peer.IsIdle()` and decides whether to fire `UF_START_FLOW` on it.
 
@@ -406,14 +408,14 @@ private:
 };
 ```
 
-This pattern shows up in [cnc_pickers' UF_Orchestrator](examples/cnc_pickers/uf_orchestrator.cpp), [queue_drain's UF_Sender](examples/queue_drain/uf_sender.cpp), [message_dispatch's UF_Professor/UF_Friend](examples/message_dispatch/uf_professor.cpp) — almost every *real* uniflow module has this skeleton.
+This pattern shows up in [cnc_pickers' UF_Orchestrator](examples/cnc_pickers/uf_orchestrator.cpp), [queue_drain's UF_Sender](examples/queue_drain/uf_sender.cpp), [message_dispatch's UF_Professor/UF_Friend](examples/message_dispatch/uf_professor.cpp) - almost every *real* uniflow module has this skeleton.
 
 ---
 
 ## Next
 
-- [EXAMPLES.en.md](EXAMPLES.en.md) — five working projects walked through
-- [DESIGN.md](DESIGN.md) — design rationale (currently Korean)
-- [uniflow.hpp](uniflow.hpp) — the header itself, with substantial comments
+- [EXAMPLES.en.md](EXAMPLES.en.md) - six working projects walked through
+- [DESIGN.md](DESIGN.md) - design rationale (currently Korean)
+- [uniflow.hpp](uniflow.hpp) - the header itself, with substantial comments
 
 Issues and PRs welcome.

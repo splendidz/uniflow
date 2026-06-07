@@ -1,369 +1,401 @@
 # uniflow-cpp
 
-> 🌐 언어: **한국어** · [English](README.en.md)
+> 🌐 언어: **한국어** | [English](README.en.md)
 
-> 단일 스레드 협력형 스케줄링(single-threaded cooperative scheduling) 위에 구축된 step 기반 비동기 프레임워크. C++17, 헤더 단일 파일.
-
----
-
-## 개요
-
-`uniflow-cpp`는 단일 스레드에서 협력적으로 진행되는 step 함수의 체인으로 모듈의 흐름을 표현하는 비동기 프레임워크다. 모든 모듈은 하나의 pump thread 위에서 round-robin으로 순회 실행되며, 블로킹 작업은 thread pool로 offload되어 결과만 다음 step에서 수신된다.
-
-새로운 패러다임을 제시하는 것이 아니라, 오랜 기간 검증된 **reactor 패턴**과 **event loop + worker pool 모델**(Node.js / libuv 계보)을 C++ 타입 시스템 위에 *구조적으로 강제*하는 형태로 정리한 프레임워크다. 사용자가 임계 구역, 락 순서, 콜백 nesting을 의식하지 않고도 동일한 효과를 얻도록 설계되었다.
-
-### 구조 비교
-
-**(A) 전통적인 thread-per-flow 모델**
+![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)
+![header-only](https://img.shields.io/badge/header--only-single%20file-success)
+![dependencies](https://img.shields.io/badge/dependencies-none-success)
+![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)
+![license](https://img.shields.io/badge/license-MIT-green)
 
 <p align="center">
-  <img src="docs/diagrams/threads.svg" alt="Traditional thread-per-flow architecture" width="820"/>
+  <img src="docs/videos/city_traffic.gif" alt="city_traffic - 단일 펌프 스레드로 도는 도시 주행 시뮬레이션" width="49%"/>
+  <img src="docs/videos/cnc_picker.gif" alt="cnc_pickers - 가상 CNC 가공 라인" width="49%"/>
 </p>
-
-각 흐름이 독립 스레드를 점유하며 공유 자원 접근마다 mutex를 거친다. 동시성 제어의 정확성을 *사용자가 직접 보장*해야 하는 모델이다.
-
-**(B) uniflow 모델**
 
 <p align="center">
-  <img src="docs/diagrams/uniflow.svg" alt="uniflow single-pump architecture" width="820"/>
+  <sub>왼쪽: 차량 수십 대가 신호를 보며 도는 <a href="examples/city_traffic/">city_traffic</a> &nbsp;|&nbsp; 오른쪽: 픽커 2대가 zone 충돌 없이 라인을 운전하는 <a href="examples/cnc_pickers/">cnc_pickers</a></sub><br>
+  <sub>두 데모 모두 <b>애플리케이션 레벨 스레드 0개</b>. 모든 흐름이 단일 펌프 스레드 위에서 협력적으로 돈다.</sub>
 </p>
 
-모든 모듈의 step이 단일 pump thread 위에서 직렬화되어 실행된다. 공유 자원 접근이 자동으로 임계 구역이 되므로 lock이 필요 없고, 데드락과 timing 의존 버그가 구조적으로 발생하지 않는다. 블로킹 I/O 만 별도 worker pool로 격리되며, 결과는 다음 step의 `AsyncResult<T>()` 로 회수된다.
+---
+
+## 수십 개의 흐름이 동시에 돌아야 한다고 해서, 수십 개의 스레드가 필요한 것은 아니다.
+
+멀티스레드로 짜는 순간 따라오는 락 경쟁, 임계영역, 데드락, 그리고 흐름마다 불어나는 스레드와 그만큼 불어나는 버그 - uniflow는 이 흐름들을 단일 스레드 협력 스케줄링 위에 step 체인으로 올린다. 당신은 복잡한 타이밍 시나리오를 머릿속에서 시뮬레이션하지 않고, *생각이 흐르는 순서 그대로* step 함수를 적기만 하면 된다. 흐름을 언제 양보하고 언제 깨우고 어떻게 직렬화할지 - 그 동시성의 뒤치다꺼리는 uniflow가 맡는다.
+
+`uniflow-cpp`는 검증된 **reactor 패턴**과 **event loop + worker pool 모델**(Node.js / libuv 계보)을 C++ 타입 시스템 위에 *구조적으로 강제*한 단일 헤더 프레임워크다. 새 패러다임이 아니라, 오래 검증된 동시성 모델을 step 함수라는 형태로 정리해 손에 쥐어 준다.
+
+```text
+헤더 1개  |  외부 의존성 0  |  C++17  |  빌드 시스템 비의존
+```
+
+- **단일 헤더** - `uniflow.hpp` 하나를 include path에 넣으면 끝. CMake/vcpkg/Conan 무엇도 요구하지 않는다.
+- **외부 의존성 0** - 표준 라이브러리만 사용. thread pool(`BS::thread_pool`)도 헤더에 인라인.
+- **흐름이 코드 구조 그대로** - `OnRoute_Validate -> OnRoute_Charge -> OnRoute_Confirm` step 체인을 읽는 것이 곧 사양서를 읽는 것.
+- **관측성은 거의 공짜** - 모든 진행이 step 호출로 환원되므로 step 전이/수행시간/대기시간이 별도 코드 없이 로깅된다.
 
 ---
 
-## 설계 의도
+## 동작 원리 - 30초 그림
 
-### 협력형 스케줄링으로 얻는 동시성
+**(A) 전통적인 thread-per-flow**
 
-수십 개의 독립적 흐름이 동시 진행되는 것처럼 보이는 동시성은 진짜 멀티스레딩 없이도 달성 가능하다. 핵심은 각 step의 호출 주기가 충분히 짧고 공평하다는 점이다 — pump thread는 매 라운드 모든 활성 모듈을 한 번씩 방문하므로, 어떤 모듈도 다른 모듈을 영구히 차단하지 못한다. 결과적으로 N개의 모듈이 동시에 진행되는 것처럼 보이는 외관을 단일 스레드로 구현한다.
+<p align="center">
+  <img src="docs/diagrams/threads.svg" alt="Traditional thread-per-flow architecture" width="760"/>
+</p>
 
-### 공유 자원 race condition의 원천적 제거
+흐름마다 스레드를 띄우고, 공유 자원 접근마다 mutex를 건다. 동시성의 정확성을 *사용자가 직접* 보장해야 한다. 흐름을 하나 늘릴 때마다 관리할 락/임계영역/수명이 같이 늘어난다.
 
-모든 step 본문이 동일한 스레드에서 직렬 실행된다는 점은 단순한 구현 디테일이 아니라 *모델의 핵심 속성*이다. 이로부터 다음이 따라온다:
+**(B) uniflow**
 
-- 모듈 간 공유 상태 접근이 자동으로 임계 구역이 된다 — mutex 없이 안전하다
-- 데드락이 구조적으로 발생할 수 없다 — 락 자체가 존재하지 않으므로
-- 멀티스레드 환경 특유의 timing 의존 버그가 발생하지 않는다 — 실행 순서가 결정적이다
+<p align="center">
+  <img src="docs/diagrams/uniflow.svg" alt="uniflow single-pump architecture" width="760"/>
+</p>
 
-이는 "락을 안전하게 거는 방법"을 가르치는 접근이 아니라, "락이 필요 없는 구조로 코드를 작성하게 만드는" 접근이다. 동시성 제어의 복잡도를 사용자가 풀어야 할 문제로 남기지 않고, 프레임워크 차원에서 제거한다.
+모든 모듈의 step이 단일 pump 스레드 위에서 직렬화되어 round-robin으로 실행된다. 흐름을 N개로 늘려도 펌프는 하나다. 블로킹 작업만 worker pool로 격리되고, 결과는 다음 step의 `AsyncResult<T>()`로 회수된다.
 
-### 블로킹 작업의 명시적 경계
+핵심 빌딩 블록은 셋뿐이다:
 
-순수 단일 스레드 모델만으로는 1초짜리 HTTP 호출 하나가 전체 pump를 정지시킨다. 이 경계는 `UF_ASYNC` 매크로로 구조적으로 분리된다 — 블로킹 작업은 *static 함수*로 작성하도록 강제되며, 결과는 반드시 *다음 step에서* 수신해야 한다. 컴파일 타임 `static_assert`가 instance 멤버 접근을 차단하여 cross-thread 데이터 공유 위험을 원천 차단한다.
-
-### 흐름이 코드의 구조 그대로 보인다
-
-step 함수의 이름과 호출 순서가 그 자체로 흐름의 사양서가 된다. `OnRoute_Validate` → `OnRoute_Charge` → `OnRoute_Confirm` 의 체인을 읽는 것만으로 처리 단계와 순서가 명확히 드러난다. 콜백 중첩이나 상태 변수 + switch 기반 state machine 없이도 비동기 흐름을 선형적으로 표현할 수 있다.
-
----
-
-## 런타임
-
-`Runtime`은 pump thread 1개와 executor(기본: `BS::thread_pool`) 1개를 묶은 실행 단위다. 모듈은 생성 시점에 부착될 runtime을 지정하며, 같은 runtime에 부착된 모든 step은 그 runtime의 단일 pump 위에서 직렬화되어 실행된다. lock-free 보장은 바로 이 직렬화에서 나온다.
-
-다만 단일 runtime이 곧 전체 프로세스의 단일 스레드를 의미하지는 않는다. 서로 무관한 task group은 각자의 runtime을 가질 수 있고, 두 runtime은 독립된 pump 위에서 서로 다른 OS thread로 진행된다 — 실질적으로 multi-pump 아키텍처가 된다.
-
-```cpp
-uniflow::Runtime ui_rt;       // UI / 입력 처리 전용 pump
-uniflow::Runtime net_rt;      // 네트워크 통신 전용 pump
-uniflow::Runtime device_rt;   // 장비 제어 전용 pump
-```
-
-각 runtime 내부는 협력형 단일 스레드의 모든 이점(자동 임계 구역, lock 불필요, 결정적 실행 순서)을 그대로 가진다. "프레임워크가 단일 스레드에 묶는다"가 아니라 "어디까지를 lock-free 경계로 둘지 사용자가 정한다"가 정확한 표현이다.
-
-### runtime 경계를 넘는 자원 접근
-
-pump가 둘 이상이면 그 사이의 공유 자원은 다시 멀티스레드 문제가 된다. 모든 모듈에 락을 거는 것은 lock-free 라는 모델의 전제를 버리는 일이므로, uniflow는 락 대신 **접근을 한 pump 스레드로 모으는** 두 가지 수단을 제공한다.
-
-**(1) `UF_POST` / `UF_POST_WAIT` — 콜백을 상대 pump로 던진다.** 다른 runtime(혹은 비-uniflow 코드, 일반 스레드)에서 어떤 runtime이 소유한 자원을 만져야 할 때, 그 자원을 직접 건드리는 대신 콜백을 해당 runtime에 post한다. 콜백은 그 runtime의 pump 스레드에서 실행되므로 락 없이 안전하다. 이것이 libuv의 `uv_async_send`, Qt의 `invokeMethod(Qt::QueuedConnection)`, Chromium의 `PostTask` 와 같은 패턴이다.
-
-```cpp
-// 다른 스레드에서: net_rt 가 소유한 상태를 안전하게 갱신
-UF_POST(net_rt, [] { ConnectionTable::MarkStale(/* ... */); });
-
-// 값을 회수해야 하면 UF_POST_WAIT - 호출 스레드가 결과를 기다린다
-std::future<int> n = UF_POST_WAIT(net_rt, [] { return ConnectionTable::Count(); });
-int count = n.get();
-```
-
-post된 콜백은 step/flow 모델 *밖*에서 도는 raw 콜백이므로 짧고 논블로킹이어야 한다(pump 독점 금지). `UF_POST_WAIT` 은 자기 자신을 구동하는 pump 스레드에서 부르면 데드락이므로 step 본문에서 호출하지 않는다(assert로 방지). 매크로는 호출 위치(`__FILE__`/`__LINE__`/`__FUNCTION__`)를 자동으로 붙여 observer 로깅에 넘긴다 — 매크로 없는 `net_rt.Post(...)` / `net_rt.PostAndWait(...)` 도 동작하지만 caller 정보는 비게 된다.
-
-**(2) `UF_LINK` — 두 runtime을 한 pump 스레드로 합친다.** 공유가 빈번해서 post로는 부족할 때, 한 runtime을 다른 runtime에 link한다. link되면 상대 runtime은 자신의 observer / executor / config / 모듈 목록을 그대로 유지한 채 **pump 스레드만 driver 쪽으로 넘긴다**. 이후 두 runtime의 모든 step이 단일 스레드에서 직렬화되므로 둘 사이 공유 자원도 락이 필요 없어진다.
-
-```cpp
-uniflow::Runtime rt;
-uniflow::Runtime sub_rt;
-// ... sub_rt 에 모듈 부착 ...
-UF_LINK(rt, sub_rt);   // 이제 rt 의 pump 가 sub_rt 모듈까지 구동
-```
-
-`Link` 는 **단방향**이다 — 한 번 합치면 분리(Unlink)할 수 없다. 합쳐진 뒤 양쪽 flow가 서로 의존을 만들었을 수 있어, 어느 모듈을 어느 pump로 되돌려도 안전한지 프레임워크가 보장할 수 없기 때문이다. 그래서 권장 기본값은 **runtime 하나로 시작**하고, 독립이 확실하며 병렬성이 실제로 필요할 때만 의식적으로 runtime을 쪼개는 것이다. (자세한 패턴은 [TUTORIAL.md 챕터 9](TUTORIAL.md) 참고.)
-
-세 동작 모두 observer를 통해 로깅된다: post는 제출(`OnPostSubmitted`)과 실행(`OnPostExecuted`, queue 대기 시간 포함), link는 `OnLinked` 로 fire되며 각 콜백은 위 매크로가 잡은 caller 위치를 함께 받는다. 기본 `ConsoleObserver` 출력 예:
-
-```
-[rt#0          ] POST SUBMIT                  caller=net_worker.cpp:42 PollLoop()
-[rt#0          ] POST RUN                     queue=0.67ms  caller=net_worker.cpp:42 PollLoop()
-[rt#0          ] LINK                         rt#1 -> rt#0  caller=app.cpp:18 App::Start()
-```
-
----
-
-## 옵저버
-
-step 기반 모델의 부수 효과로 **모니터링이 거의 공짜로 따라온다**. 모든 흐름이 step 함수의 호출 시퀀스로 환원되므로, pump가 step의 진입/이탈을 가로채는 자연스러운 지점이 된다. 사용자가 별도 trace 코드를 심지 않아도 다음이 자동으로 제공된다:
-
-- **step 이동 흐름**: 어느 모듈의 어느 step에서 어느 step으로 옮겨갔는지의 전체 시퀀스
-- **step 수행 시간**: 각 step body의 실행 시간 (min / max / avg)
-- **step 머문 시간**: 다음 step으로 넘어가기 전까지 모듈이 해당 step에 머무른 시간 — async 응답이나 외부 이벤트 대기 구간의 길이가 그대로 측정된다
-- **호출 횟수**: step 단위 카운터
-
-### 예제 출력
-
-위 [간단한 예제](#간단한-예제) 코드를 그대로 빌드해서 실행하면, 기본 `ConsoleObserver`가 두 모듈의 진행 상황을 별도 코드 없이 다음과 같이 기록한다 (시간 값은 예시):
-
-```
-[WorkTodo] FLOW START
-[TickJob ] FLOW START
-[WorkTodo] OnWork_Start                            ASYNC SUBMIT  DoSomething
-[WorkTodo] OnWork_Start -> OnWork_AfterAsync       #00 elapsed=0.02ms  tick x1 avg=0.02ms min=0.02ms max=0.02ms
-[TickJob ] OnTick_Begin -> OnTick_End              #00 elapsed=0.01ms  tick x1 avg=0.01ms min=0.01ms max=0.01ms
-[TickJob ] OnTick_End                              #01 elapsed=0.01ms  tick x1 avg=0.01ms min=0.01ms max=0.01ms
-[TickJob ] FLOW END  DONE  steps=#02  wall=0.05ms  step=0.02ms  async=0.00ms
-[WorkTodo]                                         ASYNC DONE    DoSomething  wait=12.31ms
-[WorkTodo] OnWork_AfterAsync -> OnWork_DoThis      #01 elapsed=12.34ms  tick x1 avg=0.03ms min=0.03ms max=0.03ms
-[WorkTodo] OnWork_DoThis -> OnWork_DoThat          #02 elapsed=0.01ms  tick x1 avg=0.01ms min=0.01ms max=0.01ms
-[WorkTodo] OnWork_DoThat                           #03 elapsed=0.01ms  tick x1 avg=0.01ms min=0.01ms max=0.01ms
-[WorkTodo] FLOW END  DONE  steps=#04  wall=12.40ms  step=0.07ms  async=12.33ms  tick x4 avg=0.02ms min=0.01ms max=0.03ms
-```
-
-각 행에는 어느 모듈의 어느 step에서 어느 step으로 옮겨갔는지, step body가 몇 번 실행됐는지(`tick xN`), 그 step에서 보낸 wall time(`elapsed`), pump-thread 본문 시간 통계(`min`/`max`/`avg`)가 들어 있다. async 작업은 `ASYNC SUBMIT`/`ASYNC DONE` 으로 별도 기록된다.
-
-특히 주목할 부분은 `DoSomething`이 12ms 걸리는 동안 같은 pump에 부착된 `TickJob`이 자기 흐름을 끝까지 진행해버린 점이다 — 단일 pump 위에서의 협력 실행이 그대로 시각화되어 있다.
-
-### 인터페이스
-
-기본 `ConsoleObserver` 대신 자체 trace/metrics 시스템에 연결하고 싶다면, `IUniflowObserver`를 상속해서 `Runtime`에 주입한다. 관심 있는 콜백만 override 하면 된다:
-
-```cpp
-// uniflow.hpp 내부 정의 (시그니처 단순화)
-class IUniflowObserver
-{
-public:
-    // 옵저버의 main signal - step 전이 + 누적 통계
-    virtual void OnStepChanged (obj, prev_step, next_step, description,
-                                step_ordinal,
-                                elapsed_ms,      // 해당 step에 머문 시간
-                                step_ticks) {}   // body 실행 횟수 + min/max/avg
-
-    // async 작업 라이프사이클
-    virtual void OnAsyncSubmitted(obj, step, job) {}
-    virtual void OnAsyncCompleted(obj, job, wait_ms, had_error, timed_out) {}
-
-    // 임계 알람 - threshold를 넘는 순간만 fire
-    virtual void OnSlowCpuStep (obj, step, cpu_ms) {}       // 단일 step이 pump를 너무 오래 점유
-    virtual void OnSlowAsync   (obj, job, wait_so_far_ms) {} // async가 너무 오래 미결
-    virtual void OnSlowRound   (runtime_index, profile) {}   // 한 라운드(사이클)가 너무 오래 - step/post별 분해 포함
-
-    // flow 결산
-    virtual void OnFlowEnded   (obj, terminal_action,
-                                wall_ms, total_step_ms, total_async_ms,
-                                flow_ticks) {}              // flow 전체 tick 통계
-
-    virtual void OnStepThrew   (obj, step, what, ...) {}    // 예외 (pump 밖으로 새지 않음)
-    virtual void OnFlowStarted (obj, origin) {}
-
-    // runtime 경계 트래픽 - caller(file/line/function) 동반
-    virtual void OnPostSubmitted(runtime_index, blocking, caller) {} // Post/PostAndWait 제출 (호출 스레드)
-    virtual void OnPostExecuted (runtime_index, blocking, queue_wait_ms, caller) {} // pump에서 실행
-    virtual void OnLinked       (driver_index, linked_index, caller) {} // Link 성립
-};
-
-// Runtime 생성 시 주입
-uniflow::Runtime rt{ uniflow::Runtime::Opts{
-    .observer = std::make_unique<MyPrometheusObserver>()
-}};
-```
-
-`OnSlowCpuStep` / `OnSlowAsync` 두 콜백은 `Config`에 지정한 임계값을 넘는 순간 자동으로 fire되므로, Prometheus / Slack / 사내 알람 시스템 등에 그대로 연결할 수 있다.
-
-### 왜 자동으로 되는가
-
-전통적인 thread-per-flow 모델에서는 "내 thread가 지금 어디서 무엇을 기다리는가"를 알기 위해 매 분기마다 사용자가 직접 로깅을 심어야 한다. uniflow는 모든 진행이 *step 호출 = 함수 진입*이라는 단일 형태로 통일되어 있어, pump 루프 한 군데에 measurement hook을 거는 것으로 모든 모듈, 모든 흐름의 측정이 끝난다. 프레임워크의 호출 컨벤션을 따르는 것 자체가 곧 트레이스 인프라를 활성화하는 행위다.
-
-### 트러블슈팅에서의 효용
-
-- **CPU 점유율이 갑자기 치솟는다** → step 수행 시간 통계를 정렬하면 의도치 않게 무거워진 step이 즉시 드러난다. pump가 단일 스레드이므로 "어느 step이 다른 step들의 진행까지 지연시키고 있는가"가 명확히 보인다.
-- **flow가 느려진 것 같다** → 특정 step의 머문 시간이 평소보다 길어졌다면 async 응답이나 외부 이벤트 대기가 늘어졌다는 신호다.
-- **특정 흐름이 멈췄다** → 마지막으로 진입한 step과 거기서 머문 시간만으로 hang 위치를 정확히 짚을 수 있다.
-
-multi-thread 환경에서 보통 별도 APM 도구나 sampling profiler가 담당하던 일을 — 심지어 그 도구들이 잘 포착하지 못하는 *"코드는 돌고 있는데 일은 진행이 안 됨"* 상태까지 포함하여 — 프레임워크 자체가 의미 있는 단위(step) 기준으로 제공한다.
-
-### 사이클(라운드) 단위 프로파일링
-
-step/flow 통계가 "모듈 하나의 흐름"을 본다면, **라운드 프로파일링은 pump의 한 사이클 전체**를 본다. 한 라운드 = pump 루프 한 바퀴(post 비우기 + 모든 활성 모듈 1회 실행). "어떤 한 사이클이 갑자기 50ms 걸렸다" 는 상황을 정확히 겨냥한다.
-
-- **라운드 주기 통계** — `rt.GetRoundStats()` 가 일을 한 라운드들의 작업 시간 분포를 돌려준다: `count / min_ms / max_ms / avg_ms / last_ms`. 순수 idle 폴링 라운드는 제외되므로 의미 있는 "바쁜 사이클" 분포만 잡힌다.
-- **peak 리셋** — `max_ms` 는 피크다. `rt.ResetRoundStats()` 로 누적 통계(특히 max 피크)를 초기화한다.
-- **느린 사이클 알람 + 분해** — `Config::slow_round_threshold_ms` 를 넘는 라운드가 생기면 `OnSlowRound(runtime_index, profile)` 가 fire된다. `profile.busy_ms` 는 그 라운드의 총 작업 시간이고, `profile.segments` 는 그 라운드에서 돈 **각 step / post 가 각각 몇 ms** 걸렸는지의 목록이다 — 50ms 사이클의 범인을 한눈에 짚는다.
-- **헤비 트레이스 on/off** — 매 라운드 step/post별 타이밍을 모으는 건 비싸므로 기본 꺼짐이다. `rt.SetRoundTracing(true)` (또는 `Config::trace_rounds`)로 켜면 `segments` 분해가 채워지고, 꺼져 있으면 `busy_ms`(라운드 길이)만 가벼운 알람으로 받는다. 런타임 중 토글 가능.
-
-```cpp
-uniflow::Runtime::Opts o;
-o.config.slow_round_threshold_ms = std::chrono::milliseconds(20); // 20ms 넘는 사이클 알람
-o.config.trace_rounds            = true;                          // step/post별 분해까지
-uniflow::Runtime rt(std::move(o));
-// ...
-uniflow::RoundStats st = rt.GetRoundStats();   // 현재 라운드 주기 avg/min/max
-rt.ResetRoundStats();                          // 피크 리셋
-```
-
-기본 `ConsoleObserver` 출력 예 (트레이스 on):
-
-```
-[rt#0          ] [SLOW ROUND]  busy=52.10ms  segments=2
-                 Step  Stage          OnProcess_WaitHwReady        48.30ms
-                 Post  rt#0           net.cpp:88 OnPoll()           3.80ms
-```
-
----
-
-## 계보
-
-이 모델의 가장 친숙한 실체는 **Node.js의 [libuv](https://libuv.org/)**다. libuv는 main thread에서 event loop를 돌리며 사용자 코드를 직렬 실행하고, 블로킹 I/O는 worker pool로 분리해 처리한 뒤 완료 콜백을 loop thread로 되돌린다. uniflow는 동일한 아키텍처를 C++ 상에 옮기되 callback 등록 방식 대신 *step 함수의 정적 체인*으로 표현 형태를 바꾼 결과다.
-
-| libuv / Node.js | uniflow-cpp |
+| 요소 | 역할 |
 |---|---|
-| event loop (main thread) | `Runtime`의 pump thread |
-| `uv_queue_work` + worker pool | `UF_ASYNC` + `IExecutor` (기본: `BS::thread_pool`) |
-| completion callback | 다음 step + `AsyncResult<T>()` |
-| event handler 등록 | step 함수 멤버 (CRTP) |
-
-추가적인 영향 계보:
-
-- **[Reactor pattern](https://en.wikipedia.org/wiki/Reactor_pattern)** (POSA Vol.1) — 단일 dispatch loop의 형식적 정의
-- **[Boost.Asio `io_context`](https://www.boost.org/doc/libs/release/doc/html/boost_asio/reference/io_context.html)** — 동일한 모델의 C++ 콜백 기반 구현
-- **[Erlang/OTP actor 모델](https://en.wikipedia.org/wiki/Actor_model)** — message-driven, 공유 메모리 없는 협력적 진행
-- **[Cooperative multitasking](https://en.wikipedia.org/wiki/Cooperative_multitasking)** — 선점형이 아닌 명시적 yield 기반 스케줄링의 일반 개념
+| `Runtime` | pump 스레드 1개 + executor(thread pool) 1개. 모듈이 부착되는 실행 단위 |
+| step 함수 | `StepResult`를 돌려주는 멤버 함수. 흐름의 한 단계. `UF_NEXT` / `Stay` / `Done` / `Fail` 로 다음을 지시 |
+| `UF_ASYNC` | 블로킹 작업을 pool로 offload. 결과는 다음 step에서 수신 |
 
 ---
 
-## 포터빌리티
+## 튜토리얼 1 - 흐름 여럿이 동시에 (라운드로빈)
 
-프레임워크 사용에 필요한 것은 단 하나의 헤더 파일(`uniflow.hpp`)이다.
-
-- **빌드 시스템 비의존**: CMake, vcpkg, Conan, package manager 어떤 것도 요구하지 않는다. include path 설정만으로 충족된다.
-- **외부 의존성 0**: 표준 라이브러리만 사용한다. thread pool 구현체(`BS::thread_pool`)는 헤더 내부에 인라인되어 있다.
-- **C++17 최소 사양**: MSVC v142+, GCC 9+, Clang 10+ 에서 검증.
-- **플랫폼 독립**: Windows / Linux / macOS 동일 컴파일. 일부 예제의 Win32 시각화만 플랫폼 의존이며, 프레임워크 자체는 무관하다.
-
-도구 체인이 제한적인 임베디드 환경, 빌드 시스템 변경이 허용되지 않는 레거시 프로젝트, 단순 prototype까지 — 헤더 하나로 동일하게 사용 가능하다는 점은 실용적 가치가 크다.
-
----
-
-## 간단한 예제
+두 모듈을 같은 `Runtime`에 올리면, 펌프가 매 라운드 두 모듈을 한 번씩 방문한다. 각 모듈은 라운드마다 step 하나씩 전진하므로, 두 체인이 한 step씩 번갈아 실행된다 - 마치 두 스레드가 동시에 도는 것처럼. 하지만 스레드는 하나다.
 
 ```cpp
 #include "uniflow.hpp"
+#include <iostream>
 
-// CRTP: 모듈 클래스는 자기 자신을 템플릿 인자로 넘겨 Uniflow를 상속한다
-class WorkTodo : public uniflow::Uniflow<WorkTodo>
+// 프레임워크 자체 로그를 끄고 우리 출력만 보기 위한 no-op observer.
+// (기본 ConsoleObserver를 쓰면 같은 인터리브가 step 전이 로그로도 찍힌다.)
+struct Silent : uniflow::IUniflowObserver {};
+
+// 모듈 A: 3-step 체인.
+class Alice : public uniflow::Uniflow<Alice>
 {
-    UF_UNIFLOW_IMPLEMENT(WorkTodo);   // 모듈 등록용 필수 매크로
-
+    UF_UNIFLOW_IMPLEMENT(Alice);
 public:
-    explicit WorkTodo(uniflow::Runtime& rt)
-        : uniflow::Uniflow<WorkTodo>(rt)
-    {
-    }
+    explicit Alice(uniflow::Runtime& rt) : uniflow::Uniflow<Alice>(rt) {}
 
-    // flow 진입 step (UF_START_FLOW가 호출하는 첫 함수)
-    StepResult OnWork_Start()
-    {
-        UF_ASYNC(DoSomething, 42);             // blocking 작업 -> thread pool로 offload
-        return UF_NEXT(OnWork_AfterAsync);     // 다음 step 예약 후 pump 양보
-    }
-
+    StepResult OnA_Step1() { std::cout << "[Alice] step 1\n"; return UF_NEXT(OnA_Step2); }
 private:
-    StepResult OnWork_AfterAsync()
-    {
-        auto r = AsyncResult<int>();           // 이전 step의 async 결과 수신
-        // do something with r ...
-        return UF_NEXT(OnWork_DoThis);
-    }
-
-    StepResult OnWork_DoThis()
-    {
-        // do this ... (예: 상태 갱신, 조건 검사)
-        return UF_NEXT(OnWork_DoThat);
-    }
-
-    StepResult OnWork_DoThat()
-    {
-        // do that ... (예: 결과 통지, 자원 해제)
-        return Done();                         // flow 종료
-    }
-
-    // UF_ASYNC가 호출하는 함수는 static이어야 한다 (instance 멤버 접근은 compile error)
-    static int DoSomething(int n);
+    StepResult OnA_Step2() { std::cout << "[Alice] step 2\n"; return UF_NEXT(OnA_Step3); }
+    StepResult OnA_Step3() { std::cout << "[Alice] step 3\n"; return Done(); }
 };
 
-// 역할이 다른 두 번째 모듈
-class TickJob : public uniflow::Uniflow<TickJob>
+// 모듈 B: 또 다른 3-step 체인.
+class Bob : public uniflow::Uniflow<Bob>
 {
-    UF_UNIFLOW_IMPLEMENT(TickJob);
-
+    UF_UNIFLOW_IMPLEMENT(Bob);
 public:
-    explicit TickJob(uniflow::Runtime& rt)
-        : uniflow::Uniflow<TickJob>(rt)
-    {
-    }
+    explicit Bob(uniflow::Runtime& rt) : uniflow::Uniflow<Bob>(rt) {}
 
-    StepResult OnTick_Begin()
-    {
-        // do something ... (예: 주기적 sensor 읽기, heartbeat)
-        return UF_NEXT(OnTick_End);
-    }
+    StepResult OnB_Step1() { std::cout << "        [Bob] step 1\n"; return UF_NEXT(OnB_Step2); }
+private:
+    StepResult OnB_Step2() { std::cout << "        [Bob] step 2\n"; return UF_NEXT(OnB_Step3); }
+    StepResult OnB_Step3() { std::cout << "        [Bob] step 3\n"; return Done(); }
+};
 
-    StepResult OnTick_End()
+int main()
+{
+    uniflow::Runtime::Opts opts;
+    opts.observer = std::make_unique<Silent>();
+    uniflow::Runtime rt{std::move(opts)};
+
+    Alice a{rt};      // 두 모듈을 같은 runtime에 부착
+    Bob   b{rt};      // -> 같은 펌프 스레드에서 협력 실행
+
+    UF_START_FLOW(a, OnA_Step1);
+    UF_START_FLOW(b, OnB_Step1);
+
+    a.WaitUntilIdle();
+    b.WaitUntilIdle();
+}
+```
+
+출력 - 두 체인이 정확히 한 step씩 번갈아 나온다:
+
+```text
+[Alice] step 1
+        [Bob] step 1
+[Alice] step 2
+        [Bob] step 2
+[Alice] step 3
+        [Bob] step 3
+```
+
+**무슨 일이 일어났나** - `UF_NEXT`는 *다음 라운드에* 다음 step을 실행하도록 예약한다. 펌프는 한 라운드에 Alice, Bob을 각각 1회 방문하므로, 라운드 1에서 두 모듈의 step 1이, 라운드 2에서 step 2가... 순서대로 인터리브된다. 모듈을 100개로 늘려도 펌프는 그대로 하나고, 공유 자원에 락을 걸 일도 없다 - 전부 같은 스레드 위니까.
+
+> 기본 observer를 그대로 두면 프레임워크가 같은 인터리브를 `FLOW START` / step 전이 로그로도 찍어 준다. 그 "공짜 관측성"은 바로 아래 [튜토리얼 3](#튜토리얼-3---관측은-공짜다-observer)에서.
+
+---
+
+## 튜토리얼 2 - 시간이 걸리는 일은 풀로 던진다 (async)
+
+step 본문에서 500ms짜리 작업을 직접 호출하면 그동안 펌프 전체가 멈춘다. 해법은 `UF_ASYNC`로 thread pool에 던지고 *다음 step*에서 결과를 받는 것. 작업이 도는 동안 펌프는 다른 모듈을 계속 돌린다.
+
+```cpp
+#include "uniflow.hpp"
+#include <chrono>
+#include <iostream>
+#include <thread>
+
+struct Silent : uniflow::IUniflowObserver {};
+
+// 느린 계산을 풀로 던지고, 다음 step에서 결과를 쓰는 모듈.
+class Worker : public uniflow::Uniflow<Worker>
+{
+    UF_UNIFLOW_IMPLEMENT(Worker);
+public:
+    explicit Worker(uniflow::Runtime& rt) : uniflow::Uniflow<Worker>(rt) {}
+
+    StepResult OnWork_Begin()
     {
-        // do something else ...
+        std::cout << "[worker] 느린 작업을 풀에 제출 (펌프는 안 막힘)\n";
+        UF_ASYNC(SlowSquare, 9);          // pool 스레드에서 실행
+        return UF_NEXT(OnWork_Done);      // 결과는 다음 step에서
+    }
+private:
+    StepResult OnWork_Done()
+    {
+        auto r = AsyncResult<int>();
+        if (r.failed()) return Fail();
+        std::cout << "[worker] 결과 도착: 9 * 9 = " << r.value() << "\n";
         return Done();
+    }
+
+    // UF_ASYNC 타겟은 반드시 static - 다른 스레드에서 도니까 인스턴스
+    // 멤버를 만질 수 없다(컴파일 에러로 강제). 입력은 인자로 복사해 넘긴다.
+    static int SlowSquare(int n)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500)); // 느린 척
+        return n * n;
+    }
+};
+
+// 같은 펌프 위에서 계속 뛰는 하트비트 - 500ms 작업이 펌프를 막지
+// 않았다는 증거.
+class Heartbeat : public uniflow::Uniflow<Heartbeat>
+{
+    UF_UNIFLOW_IMPLEMENT(Heartbeat);
+public:
+    explicit Heartbeat(uniflow::Runtime& rt) : uniflow::Uniflow<Heartbeat>(rt) {}
+
+    StepResult OnBeat_Tick()
+    {
+        if (beats_ >= 5) return Done();
+        auto now = uniflow::Clock::now();
+        if (now - last_ >= std::chrono::milliseconds(100))
+        {
+            last_ = now;
+            std::cout << "        [heartbeat] 아직 돌고 있음 (" << ++beats_ << ")\n";
+        }
+        return Stay();                    // 다음 라운드에 다시; 펌프는 그동안 쉰다
+    }
+private:
+    int                beats_ = 0;
+    uniflow::TimePoint last_  = uniflow::Clock::now();
+};
+
+int main()
+{
+    uniflow::Runtime::Opts opts;
+    opts.observer = std::make_unique<Silent>();
+    uniflow::Runtime rt{std::move(opts)};
+
+    Worker    w{rt};
+    Heartbeat h{rt};
+
+    UF_START_FLOW(w, OnWork_Begin);
+    UF_START_FLOW(h, OnBeat_Tick);
+
+    w.WaitUntilIdle();
+    h.WaitUntilIdle();
+}
+```
+
+출력 (타이밍은 근사) - 작업이 풀에서 도는 500ms 동안 하트비트가 멈추지 않는다:
+
+```text
+[worker] 느린 작업을 풀에 제출 (펌프는 안 막힘)
+        [heartbeat] 아직 돌고 있음 (1)
+        [heartbeat] 아직 돌고 있음 (2)
+        [heartbeat] 아직 돌고 있음 (3)
+        [heartbeat] 아직 돌고 있음 (4)
+[worker] 결과 도착: 9 * 9 = 81
+        [heartbeat] 아직 돌고 있음 (5)
+```
+
+**핵심** - `UF_ASYNC(SlowSquare, 9)`는 `SlowSquare`를 pool 스레드에서 실행하고 즉시 반환한다. `Worker`는 `OnWork_Done`으로 넘어가 결과를 기다리지만 *펌프를 점유하지 않는다*. 그래서 `Heartbeat`가 같은 스레드 위에서 계속 tick할 수 있다. 결과는 `AsyncResult<int>()`로 받고, 실패/타임아웃도 같은 자리에서 분기한다.
+
+> 더 자세히 - 타임아웃(`UF_ASYNC_TIMEOUT`), 에러 처리, 한 flow에서 두 번 연속 async: [TUTORIAL.md 챕터 6-7](TUTORIAL.md).
+
+---
+
+## 튜토리얼 3 - 관측은 공짜다 (observer)
+
+모든 진행이 *step 호출 = 함수 진입*이라는 단일 형태로 통일되어 있으니, 펌프 루프 한 군데에 measurement hook을 거는 것만으로 모든 모듈, 모든 흐름의 측정이 끝난다. 별도 trace 코드를 단 한 줄도 심지 않아도 된다.
+
+### 그냥 기본값으로 두면 - 전부 로깅된다
+
+위 튜토리얼들의 `Silent` observer를 빼고 `Runtime`을 기본값으로 만들면, 내장 `ConsoleObserver`가 흐름 전체를 받아 적는다.
+
+```cpp
+#include "uniflow.hpp"
+#include <chrono>
+#include <thread>
+
+// fetch -> parse -> store. 측정 코드는 한 줄도 없다.
+class Pipe : public uniflow::Uniflow<Pipe>
+{
+    UF_UNIFLOW_IMPLEMENT(Pipe);
+public:
+    explicit Pipe(uniflow::Runtime& rt) : uniflow::Uniflow<Pipe>(rt) {}
+
+    StepResult OnPipe_Fetch()
+    {
+        Describe("리포트 다운로드 중");      // 로그/observer에 남길 한 줄 (선택)
+        UF_ASYNC(Download, 0);
+        return UF_NEXT(OnPipe_Parse);
+    }
+private:
+    StepResult OnPipe_Parse()
+    {
+        int rows = AsyncResult<int>().value();
+        Describe("파싱 완료: ", rows, " rows");
+        return UF_NEXT(OnPipe_Store);
+    }
+    StepResult OnPipe_Store()
+    {
+        Describe("DB 커밋");
+        return Done();
+    }
+    static int Download(int)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+        return 1234;
     }
 };
 
 int main()
 {
-    uniflow::Runtime rt;             // pump thread + thread pool 1세트
-
-    WorkTodo w{rt};                  // 모듈을 runtime에 부착
-    TickJob  t{rt};                  // 같은 runtime -> 같은 pump 위에서 협력 실행
-
-    UF_START_FLOW(w, OnWork_Start);  // 진입 step 호출 = flow 시작
-    UF_START_FLOW(t, OnTick_Begin);
-
-    w.WaitUntilIdle();               // 해당 모듈의 flow가 끝날 때까지 block
-    t.WaitUntilIdle();
+    uniflow::Runtime rt;                  // 기본 observer = ConsoleObserver
+    Pipe p{rt};
+    UF_START_FLOW(p, OnPipe_Fetch);
+    p.WaitUntilIdle();
 }
 ```
 
-세 가지 핵심 요소가 보인다:
+출력 - step 전이, async 시작/끝과 대기시간, 각 step 수행시간, flow 결산이 자동으로 (값은 예시):
 
-1. **`Runtime`**: pump thread 1개와 executor 1개를 소유. 여러 모듈(`WorkTodo`, `TickJob`)이 같은 runtime에 부착되어 단일 pump 위에서 병렬로 진행된다.
-2. **Step 체인**: `OnWork_Start` → `OnWork_AfterAsync` → `OnWork_DoThis` → `OnWork_DoThat`. 흐름이 함수 이름과 호출 순서로 그대로 드러난다.
-3. **`UF_ASYNC` + 다음 step**: 블로킹 작업이 pump를 점유하지 않으며, 결과는 다음 step의 `AsyncResult<T>()`로 수신된다.
+```text
+[Pipe] FLOW START  caller=obs.cpp:34 main()
+[Pipe] OnPipe_Fetch              리포트 다운로드 중   ASYNC SUBMIT  Download
+[Pipe] OnPipe_Fetch -> OnPipe_Parse  리포트 다운로드 중   #00 elapsed=0.03ms  tick x1 avg=0.03ms min=0.03ms max=0.03ms
+[Pipe]                           ASYNC DONE    Download  wait=40.21ms
+[Pipe] OnPipe_Parse -> OnPipe_Store  파싱 완료: 1234 rows #01 elapsed=40.30ms  tick x1 avg=0.02ms min=0.02ms max=0.02ms
+[Pipe] OnPipe_Store              DB 커밋              #02 elapsed=0.01ms  tick x1 avg=0.01ms min=0.01ms max=0.01ms
+[Pipe] FLOW END  DONE  steps=#02  wall=40.40ms  step=0.06ms  async=40.21ms  tick x3 avg=0.02ms min=0.01ms max=0.03ms
+```
+
+각 줄에 *어느 step에서 어느 step으로* 옮겨갔는지, *그 step에 머문 시간*(`elapsed`), *본문 실행 시간 통계*(`min`/`max`/`avg`), async 작업의 *pool 대기시간*(`wait`)이 담겨 있다. `Describe(...)`로 남긴 한 줄도 함께. 이 모든 게 step 함수에 trace 코드를 넣지 않고 얻어진다.
+
+### 내 모니터링에 연결하기 - 관심 훅만 override
+
+자체 metrics/alert 시스템에 붙이고 싶으면 `IUniflowObserver`를 상속해 *관심 있는 콜백만* 재정의한 뒤 `Runtime`에 주입한다.
+
+```cpp
+class Metrics : public uniflow::IUniflowObserver
+{
+public:
+    // 모든 모듈의 모든 step 전이가 여기 한 곳으로 모인다.
+    void OnStepChanged(std::string_view obj, std::string_view prev_step,
+                       std::string_view /*next_step*/, std::string_view /*desc*/,
+                       int /*ordinal*/, double elapsed_ms,
+                       const uniflow::TickStats& /*ticks*/) override
+    {
+        // prometheus_step_ms.observe({obj, prev_step}, elapsed_ms);
+        ++step_count_;
+    }
+
+    // 임계값(Config::slow_step_threshold_ms, 기본 10ms)을 넘는 순간 자동 fire.
+    // Slack/PagerDuty 알람을 여기에 그냥 걸면 된다.
+    void OnSlowCpuStep(std::string_view obj, std::string_view step,
+                       double cpu_ms) override
+    {
+        // alert(obj, step, cpu_ms);   // "이 step이 펌프를 너무 오래 잡았다"
+    }
+
+    int step_count_ = 0;
+};
+
+int main()
+{
+    uniflow::Runtime::Opts opts;
+    opts.observer = std::make_unique<Metrics>();
+    uniflow::Runtime rt{std::move(opts)};
+    // ... 이 runtime의 모든 모듈/흐름이 Metrics로 측정된다
+}
+```
+
+**왜 이게 강력한가** - thread-per-flow 모델에서는 "내 스레드가 지금 어디서 무엇을 기다리는가"를 알려고 매 분기마다 직접 로깅을 심어야 한다. uniflow는 펌프 한 곳이 step 진입/이탈을 가로채므로, 측정 지점이 *코드 전체에 흩어지지 않고 단 한 곳*이다. 게다가 보통 멀티스레드에서 APM 도구도 잘 못 잡는 *"코드는 도는데 일은 진행이 안 됨"* 상태 - 특정 step에 비정상적으로 오래 머무는 것 - 까지 step 단위로 드러난다.
+
+> observer 훅 전체 목록(async/slow-async/slow-round/post/link), 라운드 단위 프로파일링, 콘솔+파일 동시 출력 실제 사례: [TUTORIAL.md 챕터 8](TUTORIAL.md), [cnc_pickers의 EnvLogObserver](examples/cnc_pickers/).
 
 ---
 
-## 문서
+## 더 배우기
 
-| 문서 | 대상 |
+| 문서 | 내용 |
 |---|---|
-| [TUTORIAL.md](TUTORIAL.md) | 1-step 모듈부터 async 오케스트레이션까지 단계별 학습 |
-| [EXAMPLES.md](EXAMPLES.md) | 5개의 실행 가능한 예제 프로젝트 |
+| [TUTORIAL.md](TUTORIAL.md) | 1-step 모듈부터 멀티 runtime 오케스트레이션까지, 한 챕터에 한 개념씩 (10챕터) |
+| [EXAMPLES.md](EXAMPLES.md) | 동작하는 예제 6개 갤러리 - 각 예제 페이지로 연결 |
 | [DESIGN.md](DESIGN.md) | 설계 결정의 근거, 컨셉 변천, 트레이드오프 |
-| [uniflow.hpp](uniflow.hpp) | 헤더 본체 (약 1,300줄, 상세 주석 포함) |
+| [uniflow.hpp](uniflow.hpp) | 헤더 본체 (상세 주석 포함) |
+
+---
+
+## 예제
+
+전부 빌드하면 바로 도는 *완성된* 프로젝트다. 대표작 둘:
+
+### city_traffic - 마지막 피날레
+
+<p align="center">
+  <img src="docs/videos/city_traffic.gif" alt="city_traffic demo" width="640"/>
+</p>
+
+수십 대의 차량이 각자 독립된 uniflow 모듈로, 공유 신호등과 앞차를 보며 가감속/정지/회전하며 도시를 순환한다. 신호등도 교차로마다 한 모듈씩. **애플리케이션 레벨 스레드는 0개** - 모든 차량과 신호가 단일 펌프 위에서 돌고, 공유 World(차량 위치 + 신호 테이블)는 단일 스레드라 락이 없다.
+
+[페이지 보기](examples/city_traffic/README.md) | [폴더](examples/city_traffic/)
+
+### cnc_pickers - 레퍼런스 프로젝트
+
+<p align="center">
+  <img src="docs/videos/cnc_picker.gif" alt="cnc_pickers demo" width="640"/>
+</p>
+
+가상 CNC 가공 라인. Load 픽커가 부품을 A->B로, Stage가 B에서 가공, Unload 픽커가 B->C로 옮긴다. 두 픽커가 zone B에 동시에 들어가지 않게 오케스트레이터가 조율하며 라인을 연속 운전한다. 모터/그리퍼 모션의 *Cmd -> Wait* 2-step 패턴, 가상 하드웨어 settle 모델링, 콘솔/파일 동시 로깅까지.
+
+[페이지 보기](examples/cnc_pickers/README.md) | [폴더](examples/cnc_pickers/)
+
+### 나머지 예제
+
+| 예제 | 한 줄 | 난이도 | UI |
+|---|---|---|---|
+| [shared_ostream](examples/shared_ostream/README.md) | 모듈 둘이 한 ostringstream을 락 없이 공유 (최소 예제) | ★☆☆☆☆ | 콘솔 |
+| [queue_drain](examples/queue_drain/README.md) | 송수신 큐 drain 패턴 | ★★☆☆☆ | Win32 |
+| [message_dispatch](examples/message_dispatch/README.md) | 두 스폰서 -> 학생 메시지 디스패치 | ★★★☆☆ | Win32 |
+| [weather_llm](examples/weather_llm/README.md) | 기상청 XML -> Gemini 요약 (실제 비동기 I/O) | ★★★★★ | 콘솔 |
+
+전체 갤러리와 추천 학습 순서는 [EXAMPLES.md](EXAMPLES.md)에.
 
 ---
 
@@ -383,13 +415,17 @@ g++ -std=c++17 -O2 -pthread -I . examples/shared_ostream/*.cpp -o shared_ostream
 
 **Visual Studio**: `examples/*/<name>.vcxproj` 가 즉시 동작. `AdditionalIncludeDirectories=..\..\` 만 설정되어 있으면 충분하다.
 
+### 포터빌리티
+
+- **빌드 시스템 비의존** - include path 설정만으로 충족. package manager 불필요.
+- **C++17 최소 사양** - MSVC v142+, GCC 9+, Clang 10+ 에서 검증.
+- **플랫폼 독립** - Windows / Linux / macOS 동일 컴파일. 일부 예제의 Win32 시각화만 플랫폼 의존이며, 프레임워크 자체는 무관하다.
+
 ---
 
-## 데모
+## 다른 언어 포트
 
-![demo](docs/videos/uniflow_overview.gif)
-
-> 데모 영상은 `docs/videos/` 디렉토리에서 관리된다.
+- [uniflow.py](uniflow.py) - Python 포트. 설계 노트는 [PYTHON_PORT.md](PYTHON_PORT.md).
 
 ---
 
