@@ -1,0 +1,70 @@
+name: ci
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Portable verification: the framework is a single header with no external
+  # deps, so the quickstart tutorials and the shared_ostream example build and
+  # run identically on Linux, macOS, and Windows. This job drives the badge.
+  verify:
+    name: ${{ matrix.os }} / ${{ matrix.cxx }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, cxx: g++ }
+          - { os: ubuntu-latest, cxx: clang++ }
+          - { os: macos-latest,  cxx: clang++ }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run quickstart tutorials + shared_ostream
+        shell: bash
+        run: |
+          set -euo pipefail
+          for t in tut1_roundrobin tut2_async tut3_observer; do
+            echo "::group::build $t"
+            ${{ matrix.cxx }} -std=c++17 -O2 -pthread -I . examples/quickstart/$t.cpp -o $t
+            ./$t
+            echo "::endgroup::"
+          done
+          echo "::group::build shared_ostream"
+          ${{ matrix.cxx }} -std=c++17 -O2 -pthread -I . examples/shared_ostream/*.cpp -o shared_ostream
+          ./shared_ostream
+          echo "::endgroup::"
+
+  windows-msvc:
+    name: windows-latest / msvc
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Build and run quickstart tutorials + shared_ostream
+        shell: cmd
+        run: |
+          for %%t in (tut1_roundrobin tut2_async tut3_observer) do (
+            cl /nologo /std:c++17 /EHsc /I . examples\quickstart\%%t.cpp /Fe:%%t.exe || exit /b 1
+            %%t.exe || exit /b 1
+          )
+          cl /nologo /std:c++17 /EHsc /I . examples\shared_ostream\*.cpp /Fe:shared_ostream.exe || exit /b 1
+          shared_ostream.exe || exit /b 1
+
+  # Win32 GUI examples are Windows-only and build (not run, since they open
+  # windows). Kept best-effort so a runner-SDK quirk never reds the badge.
+  windows-gui-examples:
+    name: windows GUI examples (best-effort)
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Compile Win32 examples (no run)
+        shell: cmd
+        run: |
+          for %%e in (city_traffic cnc_pickers queue_drain message_dispatch weather_llm) do (
+            cl /nologo /std:c++17 /EHsc /I . examples\%%e\*.cpp /Fe:%%e.exe /link user32.lib gdi32.lib winhttp.lib || exit /b 1
+          )

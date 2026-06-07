@@ -43,8 +43,7 @@ Output:
 === shared_ostream: two writers, one log, no locks ===
 ...
 --- output ---
-Hello World. Hello World. Hello World. Hello World. Hello World.
-Hello World. Hello World. Hello World. Hello World. Hello World.
+Hello World. Hello World. Hello World. Hello World. Hello World. Hello World. Hello World. Hello World. Hello World. Hello World.
 --- end ---
 
 expected "Hello World." occurrences = 10, got = 10

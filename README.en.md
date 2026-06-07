@@ -2,6 +2,7 @@
 
 > 🌐 Language: [한국어](README.md) | **English**
 
+[![ci](https://github.com/splendidz/uniflow-cpp/actions/workflows/ci.yml/badge.svg)](https://github.com/splendidz/uniflow-cpp/actions/workflows/ci.yml)
 ![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)
 ![header-only](https://img.shields.io/badge/header--only-single%20file-success)
 ![dependencies](https://img.shields.io/badge/dependencies-none-success)
@@ -298,15 +299,15 @@ Output - step transitions, async start/finish with wait time, per-step run time,
 
 ```text
 [Pipe] FLOW START  caller=obs.cpp:34 main()
-[Pipe] OnPipe_Fetch              downloading report   ASYNC SUBMIT  Download
-[Pipe] OnPipe_Fetch -> OnPipe_Parse  downloading report   #00 elapsed=0.03ms  tick x1 avg=0.03ms min=0.03ms max=0.03ms
-[Pipe]                           ASYNC DONE    Download  wait=40.21ms
+[Pipe] (entry)                       ASYNC SUBMIT  Download
+[Pipe] (entry) -> OnPipe_Parse       downloading report   #00 elapsed=1.77ms  tick x1 avg=0.01ms min=0.01ms max=0.01ms
+[Pipe]                               ASYNC DONE    Download  wait=40.21ms
 [Pipe] OnPipe_Parse -> OnPipe_Store  parsed 1234 rows     #01 elapsed=40.30ms  tick x1 avg=0.02ms min=0.02ms max=0.02ms
-[Pipe] OnPipe_Store              committed to db      #02 elapsed=0.01ms  tick x1 avg=0.01ms min=0.01ms max=0.01ms
-[Pipe] FLOW END  DONE  steps=#02  wall=40.40ms  step=0.06ms  async=40.21ms  tick x3 avg=0.02ms min=0.01ms max=0.03ms
+[Pipe] OnPipe_Store                  committed to db      #02 elapsed=0.10ms  tick x1 avg=0.01ms min=0.01ms max=0.01ms
+[Pipe] FLOW END  DONE  steps=#02  wall=40.43ms  step=0.04ms  async=40.21ms  tick x3 avg=0.01ms min=0.01ms max=0.02ms (OnPipe_Parse)
 ```
 
-Each line carries *which step moved to which*, *time spent in that step* (`elapsed`), *body run-time stats* (`min`/`max`/`avg`), and the async job's *pool wait time* (`wait`), plus whatever `Describe(...)` left. All of it without putting trace code in the step functions.
+Each line carries *which step moved to which*, *time spent in that step* (`elapsed`), *body run-time stats* (`min`/`max`/`avg`), and the async job's *pool wait time* (`wait`), plus whatever `Describe(...)` left (the entry step shows as `(entry)`). All of it without putting trace code in the step functions.
 
 ### Wire it into your monitoring - override only the hooks you want
 
@@ -400,6 +401,25 @@ The full gallery and a suggested reading order live in [EXAMPLES.en.md](EXAMPLES
 
 ---
 
+## Fit - when to use it, when not to
+
+**A good fit when**
+- Dozens to hundreds of logical flows must progress at once, but each flow *can be cut into short steps* (state machines, equipment sequences, simulations, event handling)
+- There is enough shared state between flows that lock management is a burden
+- You want to observe/debug flow progress at step granularity
+- You cannot touch the build system (one header is all it takes)
+
+**Not a good fit when**
+- You need CPU-bound parallelism that *saturates all cores* - a single pump drives one core. Heavy compute can go to the pool via `UF_ASYNC`, but if the essence is large-scale parallel computation, another tool is better.
+- A third-party blocking loop that is hard to cut into steps or cannot yield cooperatively (isolate such work with `UF_ASYNC`)
+- An ultra-low-latency path where microsecond delays are critical - the cooperative round period becomes the limit
+
+**How it relates to other tools**
+- **Boost.Asio / libuv** - the same reactor + worker-pool model. uniflow expresses flows as *step function chains* instead of callback registration, and is a single header with no external deps.
+- **State-machine libraries (boost.sml, etc.)** - instead of a transition table, the call order of step functions *is* the state machine. Async orchestration, scheduling, and observability are built into the framework.
+
+---
+
 ## Build
 
 Point the include path at this directory and that is all.
@@ -415,6 +435,18 @@ g++ -std=c++17 -O2 -pthread -I . examples/shared_ostream/*.cpp -o shared_ostream
 ```
 
 **Visual Studio**: `examples/*/<name>.vcxproj` works out of the box; `AdditionalIncludeDirectories=..\..\` is all it needs.
+
+### Run it in your browser
+
+To try the quick tutorials with no local setup, open the repo in GitHub Codespaces (badge below) and in the terminal:
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/splendidz/uniflow-cpp)
+
+```bash
+g++ -std=c++17 -O2 -pthread -I . examples/quickstart/tut1_roundrobin.cpp -o tut1 && ./tut1
+```
+
+The compilable single-file versions of all three quick tutorials live in [examples/quickstart/](examples/quickstart/), and CI builds/runs them on Windows/Linux/macOS on every commit.
 
 ### Portability
 

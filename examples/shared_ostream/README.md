@@ -43,8 +43,7 @@ g++ -std=c++17 -O2 -pthread -I . examples/shared_ostream/*.cpp -o shared_ostream
 === shared_ostream: two writers, one log, no locks ===
 ...
 --- output ---
-Hello World. Hello World. Hello World. Hello World. Hello World.
-Hello World. Hello World. Hello World. Hello World. Hello World.
+Hello World. Hello World. Hello World. Hello World. Hello World. Hello World. Hello World. Hello World. Hello World. Hello World.
 --- end ---
 
 expected "Hello World." occurrences = 10, got = 10

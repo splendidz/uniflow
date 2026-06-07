@@ -2,6 +2,7 @@
 
 > 🌐 언어: **한국어** | [English](README.en.md)
 
+[![ci](https://github.com/splendidz/uniflow-cpp/actions/workflows/ci.yml/badge.svg)](https://github.com/splendidz/uniflow-cpp/actions/workflows/ci.yml)
 ![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)
 ![header-only](https://img.shields.io/badge/header--only-single%20file-success)
 ![dependencies](https://img.shields.io/badge/dependencies-none-success)
@@ -297,15 +298,15 @@ int main()
 
 ```text
 [Pipe] FLOW START  caller=obs.cpp:34 main()
-[Pipe] OnPipe_Fetch              리포트 다운로드 중   ASYNC SUBMIT  Download
-[Pipe] OnPipe_Fetch -> OnPipe_Parse  리포트 다운로드 중   #00 elapsed=0.03ms  tick x1 avg=0.03ms min=0.03ms max=0.03ms
-[Pipe]                           ASYNC DONE    Download  wait=40.21ms
-[Pipe] OnPipe_Parse -> OnPipe_Store  파싱 완료: 1234 rows #01 elapsed=40.30ms  tick x1 avg=0.02ms min=0.02ms max=0.02ms
-[Pipe] OnPipe_Store              DB 커밋              #02 elapsed=0.01ms  tick x1 avg=0.01ms min=0.01ms max=0.01ms
-[Pipe] FLOW END  DONE  steps=#02  wall=40.40ms  step=0.06ms  async=40.21ms  tick x3 avg=0.02ms min=0.01ms max=0.03ms
+[Pipe] (entry)                       ASYNC SUBMIT  Download
+[Pipe] (entry) -> OnPipe_Parse       리포트 다운로드 중   #00 elapsed=1.77ms  tick x1 avg=0.01ms min=0.01ms max=0.01ms
+[Pipe]                               ASYNC DONE    Download  wait=40.21ms
+[Pipe] OnPipe_Parse -> OnPipe_Store  파싱 완료: 1234 rows  #01 elapsed=40.30ms  tick x1 avg=0.02ms min=0.02ms max=0.02ms
+[Pipe] OnPipe_Store                  DB 커밋              #02 elapsed=0.10ms  tick x1 avg=0.01ms min=0.01ms max=0.01ms
+[Pipe] FLOW END  DONE  steps=#02  wall=40.43ms  step=0.04ms  async=40.21ms  tick x3 avg=0.01ms min=0.01ms max=0.02ms (OnPipe_Parse)
 ```
 
-각 줄에 *어느 step에서 어느 step으로* 옮겨갔는지, *그 step에 머문 시간*(`elapsed`), *본문 실행 시간 통계*(`min`/`max`/`avg`), async 작업의 *pool 대기시간*(`wait`)이 담겨 있다. `Describe(...)`로 남긴 한 줄도 함께. 이 모든 게 step 함수에 trace 코드를 넣지 않고 얻어진다.
+각 줄에 *어느 step에서 어느 step으로* 옮겨갔는지, *그 step에 머문 시간*(`elapsed`), *본문 실행 시간 통계*(`min`/`max`/`avg`), async 작업의 *pool 대기시간*(`wait`)이 담겨 있다. `Describe(...)`로 남긴 한 줄도 함께 (진입 step은 `(entry)`로 표시된다). 이 모든 게 step 함수에 trace 코드를 넣지 않고 얻어진다.
 
 ### 내 모니터링에 연결하기 - 관심 훅만 override
 
@@ -399,6 +400,25 @@ int main()
 
 ---
 
+## 적합성 - 언제 쓰고, 언제 쓰지 말 것
+
+**잘 맞는 경우**
+- 수십~수백 개의 논리적 흐름이 동시에 진행되어야 하지만, 각 흐름이 *짧은 step으로 쪼갤 수 있는* 경우 (상태 기계, 장비 시퀀스, 시뮬레이션, 이벤트 처리)
+- 흐름 간 공유 상태가 많아 락 관리가 부담인 경우
+- 흐름의 진행 상황을 step 단위로 관측/디버깅하고 싶은 경우
+- 빌드 시스템을 못 건드리는 환경 (헤더 하나면 끝)
+
+**안 맞는 경우**
+- CPU 바운드 병렬 처리로 *코어를 다 써야* 하는 경우 - 단일 pump는 한 코어만 민다. 무거운 계산은 `UF_ASYNC`로 풀에 넘길 수 있지만, 본질이 대규모 병렬 연산이면 다른 도구가 낫다.
+- step으로 쪼개기 어렵거나 협력적 yield가 불가능한 서드파티 블로킹 루프 (이런 작업은 `UF_ASYNC`로 격리)
+- 마이크로초 단위 지연이 핵심인 초저지연 경로 - 협력 스케줄링의 라운드 주기가 한계가 된다
+
+**다른 도구와의 관계**
+- **Boost.Asio / libuv** - 같은 reactor + worker-pool 모델. uniflow는 콜백 등록 대신 *step 함수 체인*으로 흐름을 표현하고, 외부 의존성 없는 단일 헤더라는 점이 다르다.
+- **상태 기계 라이브러리(boost.sml 등)** - 전이 테이블 대신 step 함수의 호출 순서가 곧 상태 기계다. 비동기 오케스트레이션과 스케줄링, 관측까지 프레임워크에 내장된 점이 다르다.
+
+---
+
 ## 빌드
 
 include path에 본 디렉토리만 지정하면 된다.
@@ -414,6 +434,18 @@ g++ -std=c++17 -O2 -pthread -I . examples/shared_ostream/*.cpp -o shared_ostream
 ```
 
 **Visual Studio**: `examples/*/<name>.vcxproj` 가 즉시 동작. `AdditionalIncludeDirectories=..\..\` 만 설정되어 있으면 충분하다.
+
+### 브라우저에서 바로 실행
+
+설치 없이 퀵 튜토리얼을 돌려보고 싶다면 GitHub Codespaces로 리포를 열고(아래 배지) 터미널에서:
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/splendidz/uniflow-cpp)
+
+```bash
+g++ -std=c++17 -O2 -pthread -I . examples/quickstart/tut1_roundrobin.cpp -o tut1 && ./tut1
+```
+
+세 퀵 튜토리얼의 컴파일 가능한 단일 파일은 [examples/quickstart/](examples/quickstart/)에 있고, CI가 매 커밋마다 Windows/Linux/macOS에서 이들을 빌드/실행한다.
 
 ### 포터빌리티
 
