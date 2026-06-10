@@ -1,6 +1,6 @@
 # city_traffic
 
-> 🌐 언어: **한국어** | [English](README.md) &nbsp;|&nbsp; [<- 예제 갤러리](../../../EXAMPLES.kr.md)
+> 🌐 언어: **한국어** | [English](README.md) &nbsp;|&nbsp; [<- 예제 갤러리](../../EXAMPLES.kr.md)
 
 <p align="center">
   <img src="../../../docs/videos/city_traffic.gif" alt="city_traffic demo" width="720"/>
@@ -72,6 +72,6 @@ build\city_traffic.exe
 
 ## 더 읽기
 
-- 협력 스케줄링과 lock-free 공유의 기초: [TUTORIAL.kr.md 챕터 3, 5](../../../TUTORIAL.kr.md)
-- 오케스트레이션/상태 폴링 패턴: [TUTORIAL.kr.md 마지막 챕터](../../../TUTORIAL.kr.md)
-- 전체 예제 갤러리: [EXAMPLES.kr.md](../../../EXAMPLES.kr.md)
+- 협력 스케줄링과 lock-free 공유의 기초: [TUTORIAL.kr.md 챕터 3, 5](../../TUTORIAL.kr.md)
+- 오케스트레이션/상태 폴링 패턴: [TUTORIAL.kr.md 마지막 챕터](../../TUTORIAL.kr.md)
+- 전체 예제 갤러리: [EXAMPLES.kr.md](../../EXAMPLES.kr.md)

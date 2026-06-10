@@ -1,6 +1,6 @@
 # weather_llm
 
-> 🌐 언어: **한국어** | [English](README.md) &nbsp;|&nbsp; [<- 예제 갤러리](../../../EXAMPLES.kr.md)
+> 🌐 언어: **한국어** | [English](README.md) &nbsp;|&nbsp; [<- 예제 갤러리](../../EXAMPLES.kr.md)
 
 진짜 비동기 I/O. 모듈 하나(`UF_Weather`)가 세 step에 걸쳐 *바깥 세계*와 통신합니다:
 
@@ -67,5 +67,5 @@ weather_llm.exe
 
 ## 더 읽기
 
-- UF_ASYNC와 결과 수신, 타임아웃/에러: [TUTORIAL.kr.md 챕터 6-7](../../../TUTORIAL.kr.md)
-- 전체 예제 갤러리: [EXAMPLES.kr.md](../../../EXAMPLES.kr.md)
+- UF_ASYNC와 결과 수신, 타임아웃/에러: [TUTORIAL.kr.md 챕터 6-7](../../TUTORIAL.kr.md)
+- 전체 예제 갤러리: [EXAMPLES.kr.md](../../EXAMPLES.kr.md)

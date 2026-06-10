@@ -1,6 +1,6 @@
 # quickstart
 
-> 🌐 Language: [한국어](README.kr.md) | **English** &nbsp;|&nbsp; [<- Example gallery](../../../EXAMPLES.md)
+> 🌐 Language: [한국어](README.kr.md) | **English** &nbsp;|&nbsp; [<- Example gallery](../../EXAMPLES.md)
 
 Single-file, compile-and-run versions of the 3 quick tutorials from the [README](../../../README.md). CI builds and runs these on Windows/Linux/macOS, so the README code is guaranteed to work.
 

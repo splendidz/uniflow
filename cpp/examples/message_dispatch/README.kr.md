@@ -1,6 +1,6 @@
 # message_dispatch
 
-> 🌐 언어: **한국어** | [English](README.md) &nbsp;|&nbsp; [<- 예제 갤러리](../../../EXAMPLES.kr.md)
+> 🌐 언어: **한국어** | [English](README.md) &nbsp;|&nbsp; [<- 예제 갤러리](../../EXAMPLES.kr.md)
 
 세 모듈(`UF_Professor`, `UF_Friend`, `UF_Student`)이 공유 메일박스로 협력합니다. 교수는 과제를, 친구는 놀자는 메시지를 던지고, 학생은 받은 순서로 처리합니다. 학생은 능력이 부족하면 훈련, 너무 지치면 잠, 충분하면 과제 수행 - 놀이는 별도 chain입니다.
 
@@ -39,6 +39,6 @@ cl /std:c++17 /EHsc /I cpp cpp\examples\message_dispatch\*.cpp /Fe:message_dispa
 
 ## 더 읽기
 
-- 한 flow 안의 조건부 분기와 async: [TUTORIAL.kr.md 챕터 2, 6](../../../TUTORIAL.kr.md)
-- 모듈 간 통신: [TUTORIAL.kr.md 챕터 5, 마지막 챕터](../../../TUTORIAL.kr.md)
-- 전체 예제 갤러리: [EXAMPLES.kr.md](../../../EXAMPLES.kr.md)
+- 한 flow 안의 조건부 분기와 async: [TUTORIAL.kr.md 챕터 2, 6](../../TUTORIAL.kr.md)
+- 모듈 간 통신: [TUTORIAL.kr.md 챕터 5, 마지막 챕터](../../TUTORIAL.kr.md)
+- 전체 예제 갤러리: [EXAMPLES.kr.md](../../EXAMPLES.kr.md)

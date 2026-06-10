@@ -1,5 +1,7 @@
 # uniflow.py — Python 포팅 진행 노트
 
+> 🌐 언어: **한국어** | [English](PYTHON_PORT.md)
+
 > C++ `uniflow.hpp` 의 Python 형제(`uniflow.py`)에 대한 설계/진행 기록.
 > **이 문서는 uniflow 라이브러리에 한정한다** — 특정 소비자(애플리케이션)에 대한 내용은 담지 않는다.
 

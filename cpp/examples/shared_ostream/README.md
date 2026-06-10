@@ -1,6 +1,6 @@
 # shared_ostream
 
-> 🌐 Language: [한국어](README.kr.md) | **English** &nbsp;|&nbsp; [<- Example gallery](../../../EXAMPLES.md)
+> 🌐 Language: [한국어](README.kr.md) | **English** &nbsp;|&nbsp; [<- Example gallery](../../EXAMPLES.md)
 
 The smallest example. Two modules attached to the same Runtime alternate writes into one `std::ostringstream` with no locks. It is the code that *proves* uniflow's most essential property: **every step body on the same Runtime runs on one thread**. Two modules or ten, you can share a resource with no mutex and no race.
 
@@ -54,5 +54,5 @@ PASS: shared log is race-free, order preserved
 
 ## Read more
 
-- One Runtime, many modules, lock-free sharing: [TUTORIAL.md chapter 5](../../../TUTORIAL.md)
-- Full example gallery: [EXAMPLES.md](../../../EXAMPLES.md)
+- One Runtime, many modules, lock-free sharing: [TUTORIAL.md chapter 5](../../TUTORIAL.md)
+- Full example gallery: [EXAMPLES.md](../../EXAMPLES.md)

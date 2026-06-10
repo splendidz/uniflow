@@ -1,6 +1,6 @@
 # queue_drain
 
-> 🌐 Language: [한국어](README.kr.md) | **English** &nbsp;|&nbsp; [<- Example gallery](../../../EXAMPLES.md)
+> 🌐 Language: [한국어](README.kr.md) | **English** &nbsp;|&nbsp; [<- Example gallery](../../EXAMPLES.md)
 
 The classic "receiver thread -> queue -> worker thread" pattern, moved onto uniflow. `UF_Sender` pushes 1-10 messages into the queue every second, and `UF_Receiver` pulls them one at a time until the queue is empty.
 
@@ -41,5 +41,5 @@ cl /std:c++17 /EHsc /I cpp cpp\examples\queue_drain\*.cpp /Fe:queue_drain.exe
 
 ## Read more
 
-- Inter-module communication and IsIdle polling: [TUTORIAL.md chapter 5, final chapter](../../../TUTORIAL.md)
-- Full example gallery: [EXAMPLES.md](../../../EXAMPLES.md)
+- Inter-module communication and IsIdle polling: [TUTORIAL.md chapter 5, final chapter](../../TUTORIAL.md)
+- Full example gallery: [EXAMPLES.md](../../EXAMPLES.md)

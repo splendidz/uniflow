@@ -1,6 +1,6 @@
 # cnc_pickers
 
-> 🌐 언어: **한국어** | [English](README.md) &nbsp;|&nbsp; [<- 예제 갤러리](../../../EXAMPLES.kr.md)
+> 🌐 언어: **한국어** | [English](README.md) &nbsp;|&nbsp; [<- 예제 갤러리](../../EXAMPLES.kr.md)
 
 <p align="center">
   <img src="../../../docs/videos/cnc_picker.gif" alt="cnc_pickers demo" width="720"/>
@@ -68,7 +68,7 @@ parts delivered to Unload: 7
 
 ## 더 읽기
 
-- Cmd -> Wait 폴링 패턴: [TUTORIAL.kr.md 챕터 3-4](../../../TUTORIAL.kr.md)
-- 커스텀 observer 만들기: [TUTORIAL.kr.md 챕터 8](../../../TUTORIAL.kr.md)
-- 오케스트레이션 패턴: [TUTORIAL.kr.md 마지막 챕터](../../../TUTORIAL.kr.md)
-- 전체 예제 갤러리: [EXAMPLES.kr.md](../../../EXAMPLES.kr.md)
+- Cmd -> Wait 폴링 패턴: [TUTORIAL.kr.md 챕터 3-4](../../TUTORIAL.kr.md)
+- 커스텀 observer 만들기: [TUTORIAL.kr.md 챕터 8](../../TUTORIAL.kr.md)
+- 오케스트레이션 패턴: [TUTORIAL.kr.md 마지막 챕터](../../TUTORIAL.kr.md)
+- 전체 예제 갤러리: [EXAMPLES.kr.md](../../EXAMPLES.kr.md)

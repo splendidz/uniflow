@@ -237,7 +237,7 @@ int main()
 
 **핵심** - `UF_ASYNC(SlowSquare, 9)`는 `SlowSquare`를 pool 스레드에서 실행하고 즉시 반환한다. `Worker`는 `OnWork_Done`으로 넘어가 결과를 기다리지만 *펌프를 점유하지 않는다*. 그래서 `Heartbeat`가 같은 스레드 위에서 계속 tick할 수 있다. 결과는 `AsyncResult<int>()`로 받고, 실패/타임아웃도 같은 자리에서 분기한다.
 
-> 더 자세히 - 타임아웃(`UF_ASYNC_TIMEOUT`), 에러 처리, 한 flow에서 두 번 연속 async: [TUTORIAL.kr.md 챕터 6-7](TUTORIAL.kr.md).
+> 더 자세히 - 타임아웃(`UF_ASYNC_TIMEOUT`), 에러 처리, 한 flow에서 두 번 연속 async: [TUTORIAL.kr.md 챕터 6-7](cpp/TUTORIAL.kr.md).
 
 ---
 
@@ -349,7 +349,7 @@ int main()
 
 **왜 이게 강력한가** - thread-per-flow 모델에서는 "내 스레드가 지금 어디서 무엇을 기다리는가"를 알려고 매 분기마다 직접 로깅을 심어야 한다. uniflow는 펌프 한 곳이 step 진입/이탈을 가로채므로, 측정 지점이 *코드 전체에 흩어지지 않고 단 한 곳*이다. 게다가 보통 멀티스레드에서 APM 도구도 잘 못 잡는 *"코드는 도는데 일은 진행이 안 됨"* 상태 - 특정 step에 비정상적으로 오래 머무는 것 - 까지 step 단위로 드러난다.
 
-> observer 훅 전체 목록(async/slow-async/slow-round/post/link), 라운드 단위 프로파일링, 콘솔+파일 동시 출력 실제 사례: [TUTORIAL.kr.md 챕터 8](TUTORIAL.kr.md), [cnc_pickers의 EnvLogObserver](cpp/examples/cnc_pickers/).
+> observer 훅 전체 목록(async/slow-async/slow-round/post/link), 라운드 단위 프로파일링, 콘솔+파일 동시 출력 실제 사례: [TUTORIAL.kr.md 챕터 8](cpp/TUTORIAL.kr.md), [cnc_pickers의 EnvLogObserver](cpp/examples/cnc_pickers/).
 
 ---
 
@@ -357,9 +357,9 @@ int main()
 
 | 문서 | 내용 |
 |---|---|
-| [TUTORIAL.kr.md](TUTORIAL.kr.md) | 1-step 모듈부터 멀티 runtime 오케스트레이션까지, 한 챕터에 한 개념씩 (10챕터) |
-| [EXAMPLES.kr.md](EXAMPLES.kr.md) | 동작하는 예제 6개 갤러리 - 각 예제 페이지로 연결 |
-| [DESIGN.md](DESIGN.md) | 설계 결정의 근거, 컨셉 변천, 트레이드오프 |
+| [TUTORIAL.kr.md](cpp/TUTORIAL.kr.md) | 1-step 모듈부터 멀티 runtime 오케스트레이션까지, 한 챕터에 한 개념씩 (10챕터) |
+| [EXAMPLES.kr.md](cpp/EXAMPLES.kr.md) | 동작하는 예제 6개 갤러리 - 각 예제 페이지로 연결 |
+| [DESIGN.md](docs/DESIGN.md) | 설계 결정의 근거, 컨셉 변천, 트레이드오프 |
 | [uniflow.hpp](cpp/uniflow.hpp) | 헤더 본체 (상세 주석 포함) |
 
 ---
@@ -397,7 +397,7 @@ int main()
 | [message_dispatch](cpp/examples/message_dispatch/README.kr.md) | 두 스폰서 -> 학생 메시지 디스패치 | ★★★☆☆ | Win32 |
 | [weather_llm](cpp/examples/weather_llm/README.kr.md) | 기상청 XML -> Gemini 요약 (실제 비동기 I/O) | ★★★★★ | 콘솔 |
 
-전체 갤러리와 추천 학습 순서는 [EXAMPLES.kr.md](EXAMPLES.kr.md)에.
+전체 갤러리와 추천 학습 순서는 [EXAMPLES.kr.md](cpp/EXAMPLES.kr.md)에.
 
 ---
 
@@ -458,7 +458,7 @@ g++ -std=c++17 -O2 -pthread -I cpp cpp/examples/quickstart/tut1_roundrobin.cpp -
 
 ## 다른 언어 포트
 
-- [uniflow.py](python/uniflow.py) - Python 포트. 설계 노트는 [PYTHON_PORT.md](PYTHON_PORT.md).
+- [uniflow.py](python/uniflow.py) - Python 포트. [튜토리얼](python/TUTORIAL.kr.md) | [API & 설계 노트](python/PYTHON_PORT.kr.md).
 
 ---
 

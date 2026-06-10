@@ -1,6 +1,6 @@
 # queue_drain
 
-> 🌐 언어: **한국어** | [English](README.md) &nbsp;|&nbsp; [<- 예제 갤러리](../../../EXAMPLES.kr.md)
+> 🌐 언어: **한국어** | [English](README.md) &nbsp;|&nbsp; [<- 예제 갤러리](../../EXAMPLES.kr.md)
 
 전형적인 "수신 스레드 -> 큐 -> 처리 스레드" 패턴을 uniflow로 옮긴 모습. `UF_Sender`가 1초 간격으로 1~10개 메시지를 큐에 쌓고, `UF_Receiver`가 큐가 빌 때까지 하나씩 빼서 처리합니다.
 
@@ -41,5 +41,5 @@ cl /std:c++17 /EHsc /I cpp cpp\examples\queue_drain\*.cpp /Fe:queue_drain.exe
 
 ## 더 읽기
 
-- 모듈 간 통신과 IsIdle 폴링: [TUTORIAL.kr.md 챕터 5, 마지막 챕터](../../../TUTORIAL.kr.md)
-- 전체 예제 갤러리: [EXAMPLES.kr.md](../../../EXAMPLES.kr.md)
+- 모듈 간 통신과 IsIdle 폴링: [TUTORIAL.kr.md 챕터 5, 마지막 챕터](../../TUTORIAL.kr.md)
+- 전체 예제 갤러리: [EXAMPLES.kr.md](../../EXAMPLES.kr.md)

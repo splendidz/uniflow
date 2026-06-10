@@ -2,19 +2,19 @@
 
 > 🌐 Language: **English** | [한국어](TUTORIAL.kr.md)
 
-One concept per chapter. Each chapter gives you a *complete, compilable* chunk of code. After the 12 chapters plus the final orchestration section, anything under [cpp/examples/](cpp/examples/) will read naturally.
+One concept per chapter. Each chapter gives you a *complete, compilable* chunk of code. After the 12 chapters plus the final orchestration section, anything under [examples/](examples/) will read naturally.
 
-> New here? Read the 3 quick tutorials in the [README](README.md) first (round-robin / async / observer). This document is the next step.
+> New here? Read the 3 quick tutorials in the [README](../README.md) first (round-robin / async / observer). This document is the next step.
 
 We'll pretend each chapter's code lives at `tutorial/chapNN.cpp`. To build:
 
 ```powershell
-cl /std:c++17 /EHsc /I cpp tutorial\chap01.cpp /Fe:chap01.exe
+cl /std:c++17 /EHsc /I . tutorial\chap01.cpp /Fe:chap01.exe
 ```
 
 Or with g++:
 ```bash
-g++ -std=c++17 -O2 -pthread -I cpp tutorial/chap01.cpp -o chap01
+g++ -std=c++17 -O2 -pthread -I . tutorial/chap01.cpp -o chap01
 ```
 
 > 💡 Every chapter starts with `#include "uniflow.hpp"`. No other dependencies.
@@ -266,7 +266,7 @@ ping pong
 ping pong
 ```
 
-Neither `g_log` nor `g_turn` has a mutex - they're only touched from the same pump thread. ([Example 1: shared_ostream](cpp/examples/shared_ostream/) is the polished version of this pattern.)
+Neither `g_log` nor `g_turn` has a mutex - they're only touched from the same pump thread. ([Example 1: shared_ostream](examples/shared_ostream/) is the polished version of this pattern.)
 
 **Warning** - if you create *two* Runtimes you get two pump threads. At that point shared state between modules on different Runtimes does need synchronisation. Usually one Runtime is plenty.
 
@@ -440,7 +440,7 @@ int main() {
 }
 ```
 
-[cpp/examples/cnc_pickers/env_log_observer.h](cpp/examples/cnc_pickers/env_log_observer.h) is a real-world example that mirrors output to both stdout and a file.
+[examples/cnc_pickers/env_log_observer.h](examples/cnc_pickers/env_log_observer.h) is a real-world example that mirrors output to both stdout and a file.
 
 **Available hooks**:
 - `OnFlowStarted` - flow begins
@@ -688,14 +688,14 @@ private:
 };
 ```
 
-This pattern shows up in [cnc_pickers' UF_Orchestrator](cpp/examples/cnc_pickers/uf_orchestrator.cpp), [queue_drain's UF_Sender](cpp/examples/queue_drain/uf_sender.cpp), [message_dispatch's UF_Professor/UF_Friend](cpp/examples/message_dispatch/uf_professor.cpp) - almost every *real* uniflow module has this skeleton.
+This pattern shows up in [cnc_pickers' UF_Orchestrator](examples/cnc_pickers/uf_orchestrator.cpp), [queue_drain's UF_Sender](examples/queue_drain/uf_sender.cpp), [message_dispatch's UF_Professor/UF_Friend](examples/message_dispatch/uf_professor.cpp) - almost every *real* uniflow module has this skeleton.
 
 ---
 
 ## Next
 
 - [EXAMPLES.md](EXAMPLES.md) - six working projects walked through
-- [DESIGN.md](DESIGN.md) - design rationale (currently Korean)
-- [uniflow.hpp](cpp/uniflow.hpp) - the header itself, with substantial comments
+- [DESIGN.md](../docs/DESIGN.md) - design rationale (currently Korean)
+- [uniflow.hpp](uniflow.hpp) - the header itself, with substantial comments
 
 Issues and PRs welcome.

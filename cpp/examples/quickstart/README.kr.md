@@ -1,6 +1,6 @@
 # quickstart
 
-> 🌐 언어: **한국어** | [English](README.md) &nbsp;|&nbsp; [<- 예제 갤러리](../../../EXAMPLES.kr.md)
+> 🌐 언어: **한국어** | [English](README.md) &nbsp;|&nbsp; [<- 예제 갤러리](../../EXAMPLES.kr.md)
 
 [README](../../../README.kr.md)의 3개 퀵 튜토리얼을 그대로 컴파일/실행할 수 있는 단일 파일들입니다. CI가 Windows/Linux/macOS에서 이 파일들을 빌드하고 실행하므로, README의 코드가 항상 동작함이 보증됩니다.
 

@@ -2,19 +2,19 @@
 
 > 🌐 언어: **한국어** | [English](TUTORIAL.md)
 
-한 챕터에 한 개념씩. 챕터마다 *완전히 컴파일되고 도는* 코드 한 덩이를 줍니다. 12개 챕터 + 마지막 오케스트레이션까지 끝나면 [cpp/examples/](cpp/examples/) 안의 코드가 전부 자연스럽게 읽힙니다.
+한 챕터에 한 개념씩. 챕터마다 *완전히 컴파일되고 도는* 코드 한 덩이를 줍니다. 12개 챕터 + 마지막 오케스트레이션까지 끝나면 [examples/](examples/) 안의 코드가 전부 자연스럽게 읽힙니다.
 
-> 처음이라면 [README](README.kr.md)의 3개 퀵 튜토리얼(라운드로빈 / async / observer)을 먼저 보고 오면 좋습니다. 이 문서는 그 다음 단계입니다.
+> 처음이라면 [README](../README.kr.md)의 3개 퀵 튜토리얼(라운드로빈 / async / observer)을 먼저 보고 오면 좋습니다. 이 문서는 그 다음 단계입니다.
 
 각 챕터의 코드는 `tutorial/chapNN.cpp` 라고 가정하고 적어둡니다. 빌드는:
 
 ```powershell
-cl /std:c++17 /EHsc /I cpp tutorial\chap01.cpp /Fe:chap01.exe
+cl /std:c++17 /EHsc /I . tutorial\chap01.cpp /Fe:chap01.exe
 ```
 
 또는 g++:
 ```bash
-g++ -std=c++17 -O2 -pthread -I cpp tutorial/chap01.cpp -o chap01
+g++ -std=c++17 -O2 -pthread -I . tutorial/chap01.cpp -o chap01
 ```
 
 > 💡 모든 챕터는 `#include "uniflow.hpp"` 한 줄로 시작합니다. 추가 의존성 없음.
@@ -265,7 +265,7 @@ ping pong
 ping pong
 ```
 
-`g_log`, `g_turn` 어디에도 mutex 없습니다 - 둘 다 같은 펌프 스레드 위에서만 만져지니까요. (예제 1 [shared_ostream](cpp/examples/shared_ostream/) 이 이 패턴의 완성판입니다.)
+`g_log`, `g_turn` 어디에도 mutex 없습니다 - 둘 다 같은 펌프 스레드 위에서만 만져지니까요. (예제 1 [shared_ostream](examples/shared_ostream/) 이 이 패턴의 완성판입니다.)
 
 **경고** - Runtime을 *둘* 만들면 펌프가 둘이 됩니다. 그땐 두 펌프 사이의 공유 자원이 다시 멀티스레드 문제가 됩니다. 보통은 Runtime 하나로 충분하고, 정말 나눠야 할 때 둘 사이를 락 없이 잇는 방법(`Post` / `Link`)은 챕터 9에서 다룹니다.
 
@@ -437,7 +437,7 @@ int main() {
 }
 ```
 
-[cpp/examples/cnc_pickers/env_log_observer.h](cpp/examples/cnc_pickers/env_log_observer.h) 가 콘솔과 파일 *동시* 출력하는 실제 사용 예입니다.
+[examples/cnc_pickers/env_log_observer.h](examples/cnc_pickers/env_log_observer.h) 가 콘솔과 파일 *동시* 출력하는 실제 사용 예입니다.
 
 **훅 일람**:
 - `OnFlowStarted` - flow 시작
@@ -690,14 +690,14 @@ private:
 };
 ```
 
-이 패턴이 [cnc_pickers의 UF_Orchestrator](cpp/examples/cnc_pickers/uf_orchestrator.cpp), [queue_drain의 Sender](cpp/examples/queue_drain/uf_sender.cpp), [message_dispatch의 Professor/Friend](cpp/examples/message_dispatch/uf_professor.cpp) - 거의 모든 *실제* uniflow 모듈의 골격입니다.
+이 패턴이 [cnc_pickers의 UF_Orchestrator](examples/cnc_pickers/uf_orchestrator.cpp), [queue_drain의 Sender](examples/queue_drain/uf_sender.cpp), [message_dispatch의 Professor/Friend](examples/message_dispatch/uf_professor.cpp) - 거의 모든 *실제* uniflow 모듈의 골격입니다.
 
 ---
 
 ## 그 다음
 
 - [EXAMPLES.kr.md](EXAMPLES.kr.md) - 동작하는 예제 6개 둘러보기
-- [DESIGN.md](DESIGN.md) - "왜 이렇게 디자인됐는지" 가 궁금해지면
-- [uniflow.hpp](cpp/uniflow.hpp) - 헤더 자체. 핵심 클래스마다 주석 충실하게 달아둠
+- [DESIGN.md](../docs/DESIGN.md) - "왜 이렇게 디자인됐는지" 가 궁금해지면
+- [uniflow.hpp](uniflow.hpp) - 헤더 자체. 핵심 클래스마다 주석 충실하게 달아둠
 
 질문 / 버그 / 패치는 issue 또는 PR 환영입니다.

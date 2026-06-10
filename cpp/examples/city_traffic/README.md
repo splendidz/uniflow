@@ -1,6 +1,6 @@
 # city_traffic
 
-> 🌐 Language: [한국어](README.kr.md) | **English** &nbsp;|&nbsp; [<- Example gallery](../../../EXAMPLES.md)
+> 🌐 Language: [한국어](README.kr.md) | **English** &nbsp;|&nbsp; [<- Example gallery](../../EXAMPLES.md)
 
 <p align="center">
   <img src="../../../docs/videos/city_traffic.gif" alt="city_traffic demo" width="720"/>
@@ -72,6 +72,6 @@ Close the window and `App::Shutdown()` requests a stop, waits for every module t
 
 ## Read more
 
-- Cooperative scheduling and lock-free sharing basics: [TUTORIAL.md chapters 3, 5](../../../TUTORIAL.md)
-- Orchestration / state-polling pattern: [TUTORIAL.md final chapter](../../../TUTORIAL.md)
-- Full example gallery: [EXAMPLES.md](../../../EXAMPLES.md)
+- Cooperative scheduling and lock-free sharing basics: [TUTORIAL.md chapters 3, 5](../../TUTORIAL.md)
+- Orchestration / state-polling pattern: [TUTORIAL.md final chapter](../../TUTORIAL.md)
+- Full example gallery: [EXAMPLES.md](../../EXAMPLES.md)

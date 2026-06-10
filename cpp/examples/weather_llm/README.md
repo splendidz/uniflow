@@ -1,6 +1,6 @@
 # weather_llm
 
-> 🌐 Language: [한국어](README.kr.md) | **English** &nbsp;|&nbsp; [<- Example gallery](../../../EXAMPLES.md)
+> 🌐 Language: [한국어](README.kr.md) | **English** &nbsp;|&nbsp; [<- Example gallery](../../EXAMPLES.md)
 
 Real async I/O. A single module (`UF_Weather`) talks to the *outside world* across three steps:
 
@@ -67,5 +67,5 @@ Sample run:
 
 ## Read more
 
-- UF_ASYNC and receiving results, timeouts/errors: [TUTORIAL.md chapters 6-7](../../../TUTORIAL.md)
-- Full example gallery: [EXAMPLES.md](../../../EXAMPLES.md)
+- UF_ASYNC and receiving results, timeouts/errors: [TUTORIAL.md chapters 6-7](../../TUTORIAL.md)
+- Full example gallery: [EXAMPLES.md](../../EXAMPLES.md)

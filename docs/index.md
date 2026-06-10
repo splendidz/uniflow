@@ -51,8 +51,8 @@ Two such modules on one Runtime run their step chains interleaved, one step at a
 ## Get started
 
 - [Read the docs on GitHub](https://github.com/splendidz/uniflow) ([English README](https://github.com/splendidz/uniflow/blob/main/README.md))
-- [Tutorials](https://github.com/splendidz/uniflow/blob/main/TUTORIAL.md) - one concept per chapter
-- [Examples](https://github.com/splendidz/uniflow/blob/main/EXAMPLES.md) - six working projects
+- [Tutorials](https://github.com/splendidz/uniflow/blob/main/cpp/TUTORIAL.md) - one concept per chapter
+- [Examples](https://github.com/splendidz/uniflow/blob/main/cpp/EXAMPLES.md) - six working projects
 - [Run the quickstart in your browser (Codespaces)](https://codespaces.new/splendidz/uniflow)
 
 Released under the [MIT License](https://github.com/splendidz/uniflow/blob/main/LICENSE).

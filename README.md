@@ -238,7 +238,7 @@ Output (timing approximate) - the heartbeat never stops during the 500ms the job
 
 **Key idea** - `UF_ASYNC(SlowSquare, 9)` runs `SlowSquare` on a pool thread and returns immediately. `Worker` advances to `OnWork_Done` to await the result but *does not hold the pump*, so `Heartbeat` keeps ticking on the same thread. The result comes back via `AsyncResult<int>()`, where failures and timeouts branch at the same spot.
 
-> More - timeouts (`UF_ASYNC_TIMEOUT`), error handling, two back-to-back asyncs in one flow: [TUTORIAL.md chapters 6-7](TUTORIAL.md).
+> More - timeouts (`UF_ASYNC_TIMEOUT`), error handling, two back-to-back asyncs in one flow: [TUTORIAL.md chapters 6-7](cpp/TUTORIAL.md).
 
 ---
 
@@ -350,7 +350,7 @@ int main()
 
 **Why this is powerful** - in a thread-per-flow model you must plant logging at every branch to know "where is my thread waiting right now". uniflow intercepts step entry/exit in one place, so the measurement point is *not scattered across the code, it is a single spot*. And the state that multithread APM tools usually miss - *"the code is running but no work is progressing"*, i.e. a step sitting unusually long - shows up per step.
 
-> Full hook list (async / slow-async / slow-round / post / link), per-round profiling, and a real console+file dual-output case: [TUTORIAL.md chapter 8](TUTORIAL.md), [cnc_pickers' EnvLogObserver](cpp/examples/cnc_pickers/).
+> Full hook list (async / slow-async / slow-round / post / link), per-round profiling, and a real console+file dual-output case: [TUTORIAL.md chapter 8](cpp/TUTORIAL.md), [cnc_pickers' EnvLogObserver](cpp/examples/cnc_pickers/).
 
 ---
 
@@ -358,9 +358,9 @@ int main()
 
 | Doc | Contents |
 |---|---|
-| [TUTORIAL.md](TUTORIAL.md) | From a 1-step module to multi-runtime orchestration, one concept per chapter (10 chapters) |
-| [EXAMPLES.md](EXAMPLES.md) | Gallery of 6 working examples - links to each example page |
-| [DESIGN.md](DESIGN.md) | Rationale for the design decisions, concept evolution, trade-offs |
+| [TUTORIAL.md](cpp/TUTORIAL.md) | From a 1-step module to multi-runtime orchestration, one concept per chapter (10 chapters) |
+| [EXAMPLES.md](cpp/EXAMPLES.md) | Gallery of 6 working examples - links to each example page |
+| [DESIGN.md](docs/DESIGN.md) | Rationale for the design decisions, concept evolution, trade-offs |
 | [uniflow.hpp](cpp/uniflow.hpp) | The header itself (richly commented) |
 
 ---
@@ -398,7 +398,7 @@ A virtual CNC machining line. The Load picker carries a part A->B, the Stage mac
 | [message_dispatch](cpp/examples/message_dispatch/README.md) | Two sponsors -> one student message dispatch | ★★★☆☆ | Win32 |
 | [weather_llm](cpp/examples/weather_llm/README.md) | KMA XML -> Gemini summary (real async I/O) | ★★★★★ | Console |
 
-The full gallery and a suggested reading order live in [EXAMPLES.md](EXAMPLES.md).
+The full gallery and a suggested reading order live in [EXAMPLES.md](cpp/EXAMPLES.md).
 
 ---
 
@@ -459,7 +459,7 @@ The compilable single-file versions of all three quick tutorials live in [cpp/ex
 
 ## Other-language ports
 
-- [uniflow.py](python/uniflow.py) - a Python port. Design notes in [PYTHON_PORT.md](PYTHON_PORT.md).
+- [uniflow.py](python/uniflow.py) - a Python port. [Tutorial](python/TUTORIAL.md) | [API & design notes](python/PYTHON_PORT.md).
 
 ---
 

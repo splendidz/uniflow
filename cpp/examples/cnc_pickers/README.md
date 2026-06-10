@@ -1,6 +1,6 @@
 # cnc_pickers
 
-> 🌐 Language: [한국어](README.kr.md) | **English** &nbsp;|&nbsp; [<- Example gallery](../../../EXAMPLES.md)
+> 🌐 Language: [한국어](README.kr.md) | **English** &nbsp;|&nbsp; [<- Example gallery](../../EXAMPLES.md)
 
 <p align="center">
   <img src="../../../docs/videos/cnc_picker.gif" alt="cnc_pickers demo" width="720"/>
@@ -68,7 +68,7 @@ parts delivered to Unload: 7
 
 ## Read more
 
-- The Cmd -> Wait polling pattern: [TUTORIAL.md chapters 3-4](../../../TUTORIAL.md)
-- Writing a custom observer: [TUTORIAL.md chapter 8](../../../TUTORIAL.md)
-- The orchestration pattern: [TUTORIAL.md final chapter](../../../TUTORIAL.md)
-- Full example gallery: [EXAMPLES.md](../../../EXAMPLES.md)
+- The Cmd -> Wait polling pattern: [TUTORIAL.md chapters 3-4](../../TUTORIAL.md)
+- Writing a custom observer: [TUTORIAL.md chapter 8](../../TUTORIAL.md)
+- The orchestration pattern: [TUTORIAL.md final chapter](../../TUTORIAL.md)
+- Full example gallery: [EXAMPLES.md](../../EXAMPLES.md)

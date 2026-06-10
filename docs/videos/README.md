@@ -6,8 +6,8 @@
 
 | 파일 | 어디서 참조되나 |
 |---|---|
-| `city_traffic.gif` | [README](../../README.md) hero, [EXAMPLES](../../EXAMPLES.md), [city_traffic 페이지](../../cpp/examples/city_traffic/README.md) |
-| `cnc_picker.gif` | [README](../../README.md) hero, [EXAMPLES](../../EXAMPLES.md), [cnc_pickers 페이지](../../cpp/examples/cnc_pickers/README.md) |
+| `city_traffic.gif` | [README](../../README.md) hero, [EXAMPLES](../../cpp/EXAMPLES.md), [city_traffic 페이지](../../cpp/examples/city_traffic/README.md) |
+| `cnc_picker.gif` | [README](../../README.md) hero, [EXAMPLES](../../cpp/EXAMPLES.md), [cnc_pickers 페이지](../../cpp/examples/cnc_pickers/README.md) |
 
 ## 권장 사양
 
