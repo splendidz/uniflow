@@ -1,0 +1,20 @@
+# GitHub Pages (project site) config.
+# Enable in Settings > Pages > Source: "Deploy from a branch", branch main, folder /docs.
+title: uniflow-cpp
+description: >-
+  Run dozens of concurrent flows on a single thread. A header-only C++17
+  cooperative-scheduling framework (reactor + worker-pool) with zero external
+  dependencies and free step-level observability.
+theme: jekyll-theme-cayman
+
+# Used by jekyll-seo-tag and jekyll-sitemap for absolute URLs.
+url: "https://splendidz.github.io"
+baseurl: "/uniflow-cpp"
+
+plugins:
+  - jekyll-seo-tag
+  - jekyll-sitemap
+
+# Google Search Console verification (HTML tag method). jekyll-seo-tag emits
+# the <meta name="google-site-verification"> tag in <head> from this value.
+google_site_verification: "rlvMRUb4mK-Yx5uz3k7e7251www04YJU2BEgF_pt8fM"

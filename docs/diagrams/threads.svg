@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520"
+     font-family="-apple-system, system-ui, 'Segoe UI', Roboto, Arial, sans-serif">
+  <defs>
+    <marker id="arrowGray" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#495057"/>
+    </marker>
+    <marker id="arrowAmber" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#856404"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="900" height="520" fill="#ffffff"/>
+
+  <text x="450" y="32" font-size="18" font-weight="600"
+        text-anchor="middle" fill="#212529">
+    Traditional thread-per-flow
+  </text>
+  <text x="450" y="52" font-size="13" text-anchor="middle" fill="#6c757d">
+    one OS thread per independent flow, contending for shared resources through mutexes
+  </text>
+
+  <g font-size="13" fill="#212529">
+    <rect x="30"  y="80" width="180" height="120" rx="8"
+          fill="#e9ecef" stroke="#495057" stroke-width="1.5"/>
+    <text x="120" y="105" text-anchor="middle" font-weight="700">Thread 1</text>
+    <text x="120" y="126" text-anchor="middle" fill="#495057">Flow A</text>
+    <text x="120" y="150" text-anchor="middle">step 1</text>
+    <text x="120" y="168" text-anchor="middle">step 2</text>
+    <text x="120" y="186" text-anchor="middle">step 3</text>
+
+    <rect x="240" y="80" width="180" height="120" rx="8"
+          fill="#e9ecef" stroke="#495057" stroke-width="1.5"/>
+    <text x="330" y="105" text-anchor="middle" font-weight="700">Thread 2</text>
+    <text x="330" y="126" text-anchor="middle" fill="#495057">Flow B</text>
+    <text x="330" y="150" text-anchor="middle">step 1</text>
+    <text x="330" y="168" text-anchor="middle">step 2</text>
+    <text x="330" y="186" text-anchor="middle">step 3</text>
+
+    <rect x="450" y="80" width="180" height="120" rx="8"
+          fill="#e9ecef" stroke="#495057" stroke-width="1.5"/>
+    <text x="540" y="105" text-anchor="middle" font-weight="700">Thread 3</text>
+    <text x="540" y="126" text-anchor="middle" fill="#495057">Flow C</text>
+    <text x="540" y="150" text-anchor="middle">step 1</text>
+    <text x="540" y="168" text-anchor="middle">step 2</text>
+    <text x="540" y="186" text-anchor="middle">step 3</text>
+
+    <rect x="660" y="80" width="180" height="120" rx="8"
+          fill="#e9ecef" stroke="#495057" stroke-width="1.5"/>
+    <text x="750" y="105" text-anchor="middle" font-weight="700">Thread 4</text>
+    <text x="750" y="126" text-anchor="middle" fill="#495057">Flow D</text>
+    <text x="750" y="150" text-anchor="middle">step 1</text>
+    <text x="750" y="168" text-anchor="middle">step 2</text>
+    <text x="750" y="186" text-anchor="middle">step 3</text>
+  </g>
+
+  <g stroke="#495057" stroke-width="1.5" fill="none" marker-end="url(#arrowGray)">
+    <line x1="120" y1="202" x2="120" y2="278"/>
+    <line x1="330" y1="202" x2="330" y2="278"/>
+    <line x1="540" y1="202" x2="540" y2="278"/>
+    <line x1="750" y1="202" x2="750" y2="278"/>
+  </g>
+
+  <g font-size="13" fill="#721c24"
+     font-family="Consolas, 'Courier New', monospace">
+    <text x="130" y="244">lock()</text>
+    <text x="340" y="244">lock()</text>
+    <text x="550" y="244">lock()</text>
+    <text x="760" y="244">lock()</text>
+  </g>
+
+  <rect x="40" y="285" width="820" height="80" rx="10"
+        fill="#f8d7da" stroke="#a94442" stroke-width="2"/>
+  <text x="450" y="315" text-anchor="middle" font-size="16"
+        font-weight="700" fill="#721c24">Shared Resource</text>
+  <text x="450" y="340" text-anchor="middle" font-size="13"
+        fill="#721c24">mutex required for every access</text>
+
+  <line x1="450" y1="368" x2="450" y2="404"
+        stroke="#856404" stroke-width="1.5" stroke-dasharray="5 4"
+        fill="none" marker-end="url(#arrowAmber)"/>
+
+  <rect x="80" y="405" width="740" height="90" rx="8"
+        fill="#fff3cd" stroke="#856404" stroke-width="1.5"
+        stroke-dasharray="0"/>
+  <text x="450" y="430" text-anchor="middle" font-size="13"
+        font-weight="700" fill="#856404">consequences</text>
+  <g font-size="13" fill="#7d6608" text-anchor="middle">
+    <text x="450" y="455">lock contention     |     deadlock risk     |     data races</text>
+    <text x="450" y="478">timing-dependent bugs     |     priority inversion</text>
+  </g>
+</svg>
