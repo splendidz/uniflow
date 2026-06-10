@@ -158,25 +158,60 @@ While the job runs the pump keeps driving other modules. When the job finishes i
 
 ## Chapter 6. Step timeouts - `StayUntil`
 
-`run_async` handles a job that overran. The other case - polling a flag that may *never* arrive - is `self.StayUntil(timeout_sec, on_timeout)`: keep polling this step, but if `timeout_sec` passes since the step was entered, route to `on_timeout` (a cleanup/recovery step). Think of it as a step-level `catch`.
+`run_async` handles a *job* that overran. But often you commanded some hardware and are now `Stay()`-polling a "done" flag or sensor. **What if it never arrives?** A jammed axis, a stuck valve - a bare `Stay()` loop polls *forever*, and the line silently hangs with no error, which on a real machine is about the worst outcome there is.
+
+`self.StayUntil(timeout_sec, on_timeout)` is a `Stay()` with a deadline: keep polling this step, but if `timeout_sec` passes *since the step was entered*, route to `on_timeout` instead. That step is your `catch` - a guaranteed exit to a known recovery path.
+
+The whole pattern - command, wait-with-deadline, recover:
 
 ```python
-class Arm(uf.Uniflow):
-    def on_begin(self): return self.Next(self.wait_ready)
-    def wait_ready(self):
-        if hardware_ready():
-            return self.Next(self.on_go)
-        return self.StayUntil(3.0, self.on_timeout)    # give up after 3s
-    def on_go(self):
+class Move(uf.Uniflow):
+    def __init__(self, rt, axis, target_mm):
+        super().__init__(rt); self.axis = axis; self.target = target_mm; self.tries = 0
+
+    def on_command(self):
+        self.axis.move_to(self.target)            # fire the command (non-blocking)
+        return self.Next(self.wait_in_pos)
+
+    def wait_in_pos(self):
+        if self.axis.in_position():               # happy path
+            return self.Next(self.on_clamp)
+        # still moving - poll, but give up if it stalls past 2s
+        return self.StayUntil(2.0, self.on_stalled)
+
+    # reached ONLY if in_position never became true within 2s of entering the
+    # wait step. The flow cannot hang - it always lands somewhere defined.
+    def on_stalled(self):
+        self.axis.abort()
+        print("axis stalled before reaching target")
+        return self.Fail("stalled")
+
+    def on_clamp(self):
         return self.Done()
-    def on_timeout(self):
-        print("hw never reported ready - aborting")
-        return self.Fail("timeout")
 ```
 
-The deadline is measured from step entry, so the repeated Stay ticks do not push it back.
+Without `StayUntil`, `wait_in_pos` returning a bare `Stay()` would spin until someone notices the line is dead. With it you are *guaranteed* to reach `on_stalled` if the move does not complete.
 
-> **Virtual clock.** The timer and `StayUntil` deadlines run on `rt.clock`, a clock you can scale or freeze: `rt.clock.set_scale(10)` plays the whole flow back 10x; `rt.clock.freeze()` / `.resume()` holds every logical timeout (e.g. during an e-stop, a 3s timeout will not fire while paused). Async/IO deadlines stay on real time.
+**The recovery step is just a step, so it can route anywhere** - a common shape is *retry, then give up*:
+
+```python
+    def wait_in_pos(self):
+        if self.axis.in_position():
+            return self.Next(self.on_clamp)
+        return self.StayUntil(2.0, self.on_retry)
+
+    def on_retry(self):
+        self.tries += 1
+        if self.tries >= 3:
+            print("axis failed after 3 tries"); return self.Fail("gave up")
+        self.axis.abort()
+        return self.Next(self.on_command)         # re-issue -> re-enters the wait,
+                                                  # restarting the 2s window
+```
+
+Re-entering `on_command` -> `wait_in_pos` is a fresh step entry, so the 2s deadline starts over for each attempt - no manual timer bookkeeping. The deadline is measured from step entry, so the repeated Stay ticks do not push it back.
+
+> **Virtual clock.** The timer and `StayUntil` deadlines run on `rt.clock`, which you can scale or freeze: `rt.clock.set_scale(10)` plays the whole flow back 10x; `rt.clock.freeze()` / `.resume()` holds every logical timeout (e.g. during an e-stop, a 2s timeout will not fire while paused). Async/IO deadlines stay on real time.
 
 ---
 

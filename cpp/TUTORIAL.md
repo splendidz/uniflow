@@ -363,37 +363,72 @@ StepResult OnQuery_After() {
 
 ### Step timeouts: `UF_STAY_UNTIL` - the step-level `catch`
 
-`UF_ASYNC_TIMEOUT` covers an async *job* that overran. But often you are not waiting on a job at all - you are `Stay()`-polling a flag, a peer module's state, or a hardware line that has no completion callback. What if it never comes? A bare `Stay()` loop would poll forever.
+`UF_ASYNC_TIMEOUT` covers an async *job* that overran. But often you are not waiting on a job at all - you commanded some hardware and are now `Stay()`-polling a "done" flag, a sensor, a peer module's state. **What if it never arrives?** A jammed axis, a lost encoder, a stuck valve. A bare `Stay()` loop polls *forever* - the line silently hangs with no error, which on a real machine is about the worst outcome there is.
 
-`UF_STAY_UNTIL(dur, fn)` is a `Stay()` with a deadline. The step keeps polling exactly like `Stay()`, but if `dur` elapses *since the step was entered*, the flow jumps to step `fn` instead. Think of `fn` as the step's `catch` / cleanup branch:
+`UF_STAY_UNTIL(dur, fn)` is a `Stay()` with a deadline: keep polling this step, but if `dur` elapses *since the step was entered*, jump to step `fn` instead. `fn` is your `catch` - a guaranteed exit to a known recovery path.
+
+Here is the whole pattern - command, wait-with-deadline, recover:
 
 ```cpp
-StepResult OnArm_WaitReady() {
-    if (Hw::Ready()) return UF_NEXT(OnArm_Move);   // got it - proceed
-    return UF_STAY_UNTIL(3s, OnArm_Recover);       // still waiting; give up after 3s
+// Move an axis to a target, then wait for it to report InPosition.
+StepResult OnMove_Command() {
+    axis_.MoveTo(target_mm_);                    // fire the command (non-blocking)
+    Describe("moving to ", target_mm_, " mm");
+    return UF_NEXT(OnMove_WaitInPos);
 }
 
-// Reached only if Hw::Ready() never came true within 3s of entering the step
-// above. Do whatever the situation needs, then end the flow.
-StepResult OnArm_Recover() {
-    Hw::AbortMotion();
-    Describe("hw never reported ready - aborted");
-    return Fail();                                 // or retry / reset / alarm ...
+StepResult OnMove_WaitInPos() {
+    if (axis_.InPosition())                      // the happy path
+        return UF_NEXT(OnMove_Clamp);
+    // still moving - keep polling, but give up if it stalls past 2s
+    return UF_STAY_UNTIL(2s, OnMove_Stalled);
+}
+
+// Reached ONLY if InPosition never became true within 2s of entering the
+// wait step. The flow cannot hang - it always lands somewhere defined.
+StepResult OnMove_Stalled() {
+    axis_.Abort();                               // stop the motion
+    Alarm("axis stalled before reaching target");
+    return Fail();
 }
 ```
 
-Three things worth knowing:
+Without `UF_STAY_UNTIL`, `OnMove_WaitInPos` returning a bare `Stay()` would spin until someone notices the line is dead. With it you are *guaranteed* to reach `OnMove_Stalled` if the move does not complete - the flow always makes forward progress to a defined state.
 
-- **The deadline is measured from step entry, not from the `UF_STAY_UNTIL` call.** You return it on every poll tick, but the clock does not restart each tick - so a step that polls for 3s really times out at 3s, not never.
-- **It is logical time.** The deadline runs on the runtime's clock (`rt.clock()` from Chapter 3), so `Freeze()` holds it - a 3s timeout will *not* fire while the line is e-stopped - and `SetScale` scales it. Async/IO deadlines stay on real time.
-- **Two timeouts, two jobs.** `UF_ASYNC_TIMEOUT` = "this *job* must finish within T" (you read `is_timeout()` in the next step). `UF_STAY_UNTIL` = "this *step* must make progress within T" (you land in a recovery step). Use the first for `UF_ASYNC`, the second for polled conditions.
-
-It pairs naturally with `HeldFor` from Chapter 3 - poll until a flag is *stable*, but bail if it never settles:
+**The recovery step is just a step, so it can route anywhere.** A very common shape is *retry, then give up*:
 
 ```cpp
-StepResult OnArm_WaitReady(uniflow::UFTimer& t) {   // t carried via UF_NEXT(..., uniflow::UFTimer{})
-    if (t.HeldFor(Hw::Ready(), 50ms)) return UF_NEXT(OnArm_Move);  // stable -> go
-    return UF_STAY_UNTIL(3s, OnArm_Recover);                       // never settled -> recover
+StepResult OnMove_WaitInPos() {
+    if (axis_.InPosition()) return UF_NEXT(OnMove_Clamp);
+    return UF_STAY_UNTIL(2s, OnMove_Retry);
+}
+
+StepResult OnMove_Retry() {
+    if (++attempts_ >= 3) {                       // out of retries
+        Alarm("axis failed to reach target after 3 tries");
+        return Fail();
+    }
+    axis_.Abort();
+    Describe("retry ", attempts_, "/3");
+    return UF_NEXT(OnMove_Command);               // re-issue -> re-enters the wait,
+}                                                 // which restarts the 2s window
+```
+
+Re-entering `OnMove_Command` -> `OnMove_WaitInPos` is a *fresh step entry*, so the 2s deadline starts over for each attempt - no manual timer bookkeeping.
+
+Three things worth knowing:
+
+- **The deadline is measured from step entry, not from the `UF_STAY_UNTIL` call.** You return it on every poll tick, but the clock does not restart each tick - a step that polls for 2s really times out at 2s.
+- **It is logical time.** The deadline runs on the runtime's clock (`rt.clock()` from Chapter 3), so `Freeze()` holds it - a 2s timeout will *not* fire while the line is e-stopped - and `SetScale` scales it. Async/IO deadlines stay on real time.
+- **Two timeouts, two jobs.** `UF_ASYNC_TIMEOUT` = "this *job* (a UF_ASYNC) must finish within T" (read `is_timeout()` in the next step). `UF_STAY_UNTIL` = "this *step* must make progress within T" (you land in a recovery step). Use the first for async work, the second for polled conditions.
+
+It also pairs naturally with `HeldFor` (Chapter 3) - require the flag to be *stable*, but still bail if it never settles:
+
+```cpp
+StepResult OnMove_WaitInPos(uniflow::UFTimer& t) {   // t carried via UF_NEXT(..., uniflow::UFTimer{})
+    if (t.HeldFor(axis_.InPosition(), 50ms))         // in position AND settled for 50ms
+        return UF_NEXT(OnMove_Clamp);
+    return UF_STAY_UNTIL(2s, OnMove_Stalled);         // never settled -> recover
 }
 ```
 

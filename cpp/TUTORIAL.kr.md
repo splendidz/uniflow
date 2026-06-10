@@ -361,37 +361,72 @@ StepResult OnQuery_After() {
 
 ### 스텝 타임아웃: `UF_STAY_UNTIL` - 스텝 단위 `catch`
 
-`UF_ASYNC_TIMEOUT` 은 async *잡* 이 늦어진 경우를 본다. 그런데 잡을 기다리는 게 아닐 때가 많다 - 완료 콜백이 없는 플래그, 다른 모듈의 상태, 하드웨어 라인을 `Stay()` 로 폴링하는 경우. 그게 영영 안 오면? 맨 `Stay()` 루프는 무한히 폴링한다.
+`UF_ASYNC_TIMEOUT` 은 async *잡* 이 늦어진 경우를 본다. 그런데 잡을 기다리는 게 아닐 때가 많다 - 하드웨어에 명령을 내려놓고 "완료" 플래그나 센서를 `Stay()` 로 폴링하는 경우. **그게 영영 안 오면?** 축이 끼이거나, 엔코더가 끊기거나, 밸브가 멈추면 - 맨 `Stay()` 루프는 *무한히* 폴링하고, 라인은 에러도 없이 조용히 멈춰 선다. 실제 장비에선 이게 최악이다.
 
-`UF_STAY_UNTIL(dur, fn)` 은 **마감이 달린 `Stay()`** 다. 현재 step 을 `Stay()` 와 똑같이 계속 폴링하되, step 에 *진입한 시점* 부터 `dur` 이 지나면 흐름이 step `fn` 으로 빠진다. `fn` 을 그 step 의 `catch`/정리 분기로 보면 된다:
+`UF_STAY_UNTIL(dur, fn)` 은 **마감이 달린 `Stay()`** 다: 이 step 을 계속 폴링하되, step 에 *진입한 시점* 부터 `dur` 이 지나면 step `fn` 으로 빠진다. `fn` 이 곧 `catch` - 정해진 복구 경로로의 보장된 탈출구다.
+
+전체 패턴 - 명령, 마감 걸린 대기, 복구:
 
 ```cpp
-StepResult OnArm_WaitReady() {
-    if (Hw::Ready()) return UF_NEXT(OnArm_Move);   // 도착 - 진행
-    return UF_STAY_UNTIL(3s, OnArm_Recover);       // 아직 대기; 3s 지나면 포기
+// 축을 목표 위치로 이동시키고, InPosition 보고를 기다린다.
+StepResult OnMove_Command() {
+    axis_.MoveTo(target_mm_);                    // 명령 발사 (논블로킹)
+    Describe("moving to ", target_mm_, " mm");
+    return UF_NEXT(OnMove_WaitInPos);
 }
 
-// 위 step 진입 후 3s 안에 Hw::Ready() 가 끝내 안 온 경우에만 도달. 상황에
-// 맞는 정리를 한 뒤 흐름을 끝낸다.
-StepResult OnArm_Recover() {
-    Hw::AbortMotion();
-    Describe("hw never reported ready - aborted");
-    return Fail();                                 // 또는 재시도/리셋/알람 ...
+StepResult OnMove_WaitInPos() {
+    if (axis_.InPosition())                      // 정상 경로
+        return UF_NEXT(OnMove_Clamp);
+    // 아직 이동 중 - 폴링하되 2s 넘게 멈춰있으면 포기
+    return UF_STAY_UNTIL(2s, OnMove_Stalled);
+}
+
+// 대기 step 진입 후 2s 안에 InPosition 이 끝내 true 가 안 된 경우에만 도달.
+// 흐름은 멈춰 설 수 없다 - 항상 정의된 어딘가로 도착한다.
+StepResult OnMove_Stalled() {
+    axis_.Abort();                               // 모션 정지
+    Alarm("axis stalled before reaching target");
+    return Fail();
 }
 ```
 
-알아둘 세 가지:
+`UF_STAY_UNTIL` 없이 `OnMove_WaitInPos` 가 맨 `Stay()` 를 반환했다면, 누군가 라인이 죽은 걸 알아챌 때까지 무한히 돈다. 이걸 쓰면 이동이 안 끝날 경우 `OnMove_Stalled` 에 *반드시* 도달한다 - 흐름은 늘 정의된 상태로 전진한다.
 
-- **마감은 `UF_STAY_UNTIL` 호출 시점이 아니라 step 진입 기준**이다. 매 폴링 틱마다 반환하지만 시계는 틱마다 리셋되지 않는다 - 그래서 3s 폴링하는 step 은 영영이 아니라 정확히 3s 에 타임아웃된다.
-- **논리 시간이다.** 마감은 런타임 시계(챕터 3의 `rt.clock()`) 위에서 도므로 `Freeze()` 하면 멈추고(예: e-stop 중 3s 타임아웃이 안 터짐) `SetScale` 로 스케일된다. async/IO 데드라인은 실제 시간 유지.
-- **타임아웃 둘, 역할 둘.** `UF_ASYNC_TIMEOUT` = "이 *잡* 이 T 안에 끝나야"(다음 step 에서 `is_timeout()` 읽음). `UF_STAY_UNTIL` = "이 *step* 이 T 안에 진전돼야"(복구 step 으로 빠짐). 앞은 `UF_ASYNC` 에, 뒤는 폴링 조건에.
-
-챕터 3의 `HeldFor` 와 자연스럽게 짝이 된다 - 플래그가 *안정* 될 때까지 폴링하되, 끝내 안 정착하면 빠지기:
+**복구 step 도 그냥 step 이라 어디로든 라우팅할 수 있다.** 아주 흔한 형태가 *재시도 후 포기* 다:
 
 ```cpp
-StepResult OnArm_WaitReady(uniflow::UFTimer& t) {   // t 는 UF_NEXT(..., uniflow::UFTimer{}) 로 전달
-    if (t.HeldFor(Hw::Ready(), 50ms)) return UF_NEXT(OnArm_Move);  // 안정 -> 진행
-    return UF_STAY_UNTIL(3s, OnArm_Recover);                       // 끝내 미정착 -> 복구
+StepResult OnMove_WaitInPos() {
+    if (axis_.InPosition()) return UF_NEXT(OnMove_Clamp);
+    return UF_STAY_UNTIL(2s, OnMove_Retry);
+}
+
+StepResult OnMove_Retry() {
+    if (++attempts_ >= 3) {                       // 재시도 소진
+        Alarm("axis failed to reach target after 3 tries");
+        return Fail();
+    }
+    axis_.Abort();
+    Describe("retry ", attempts_, "/3");
+    return UF_NEXT(OnMove_Command);               // 재발행 -> 대기 step 재진입,
+}                                                 // 2s 창이 다시 시작됨
+```
+
+`OnMove_Command` -> `OnMove_WaitInPos` 재진입은 *새 step 진입* 이라, 시도마다 2s 마감이 새로 시작된다 - 수동 타이머 관리가 필요 없다.
+
+알아둘 세 가지:
+
+- **마감은 `UF_STAY_UNTIL` 호출 시점이 아니라 step 진입 기준**이다. 매 폴링 틱마다 반환하지만 시계는 틱마다 리셋되지 않는다 - 2s 폴링하는 step 은 정확히 2s 에 타임아웃된다.
+- **논리 시간이다.** 마감은 런타임 시계(챕터 3의 `rt.clock()`) 위에서 도므로 `Freeze()` 하면 멈추고(예: e-stop 중 2s 타임아웃이 안 터짐) `SetScale` 로 스케일된다. async/IO 데드라인은 실제 시간 유지.
+- **타임아웃 둘, 역할 둘.** `UF_ASYNC_TIMEOUT` = "이 *잡*(UF_ASYNC)이 T 안에 끝나야"(다음 step 에서 `is_timeout()` 읽음). `UF_STAY_UNTIL` = "이 *step* 이 T 안에 진전돼야"(복구 step 으로 빠짐). 앞은 async 작업에, 뒤는 폴링 조건에.
+
+챕터 3의 `HeldFor` 와도 자연스럽게 짝이 된다 - 플래그가 *안정* 되길 요구하되, 끝내 안 정착하면 빠지기:
+
+```cpp
+StepResult OnMove_WaitInPos(uniflow::UFTimer& t) {   // t 는 UF_NEXT(..., uniflow::UFTimer{}) 로 전달
+    if (t.HeldFor(axis_.InPosition(), 50ms))         // 위치 도달 AND 50ms 안정
+        return UF_NEXT(OnMove_Clamp);
+    return UF_STAY_UNTIL(2s, OnMove_Stalled);         // 끝내 미정착 -> 복구
 }
 ```
 

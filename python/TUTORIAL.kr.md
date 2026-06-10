@@ -158,25 +158,60 @@ class Worker(uf.Uniflow):
 
 ## 챕터 6. 스텝 타임아웃 - `StayUntil`
 
-`run_async` 는 잡이 늦어진 경우를 처리합니다. 반대 경우 - *영영* 안 올 수도 있는 플래그 폴링 - 은 `self.StayUntil(timeout_sec, on_timeout)`: 이 step 을 계속 폴링하되, step 진입 후 `timeout_sec` 이 지나면 `on_timeout`(정리/복구 step)으로 빠집니다. step 단위 `catch` 라고 보면 됩니다.
+`run_async` 는 *잡* 이 늦어진 경우를 처리합니다. 그런데 잡을 기다리는 게 아닐 때가 많습니다 - 하드웨어에 명령을 내려놓고 "완료" 플래그나 센서를 `Stay()` 로 폴링하는 경우. **그게 영영 안 오면?** 축이 끼이거나 밸브가 멈추면 - 맨 `Stay()` 루프는 *무한히* 폴링하고, 라인은 에러도 없이 조용히 멈춰 섭니다. 실제 장비에선 이게 최악입니다.
+
+`self.StayUntil(timeout_sec, on_timeout)` 은 **마감이 달린 `Stay()`** 입니다: 이 step 을 계속 폴링하되, step 에 *진입한 시점* 부터 `timeout_sec` 이 지나면 `on_timeout` 으로 빠집니다. 그 step 이 곧 `catch` - 정해진 복구 경로로의 보장된 탈출구입니다.
+
+전체 패턴 - 명령, 마감 걸린 대기, 복구:
 
 ```python
-class Arm(uf.Uniflow):
-    def on_begin(self): return self.Next(self.wait_ready)
-    def wait_ready(self):
-        if hardware_ready():
-            return self.Next(self.on_go)
-        return self.StayUntil(3.0, self.on_timeout)    # 3s 후 포기
-    def on_go(self):
+class Move(uf.Uniflow):
+    def __init__(self, rt, axis, target_mm):
+        super().__init__(rt); self.axis = axis; self.target = target_mm; self.tries = 0
+
+    def on_command(self):
+        self.axis.move_to(self.target)            # 명령 발사 (논블로킹)
+        return self.Next(self.wait_in_pos)
+
+    def wait_in_pos(self):
+        if self.axis.in_position():               # 정상 경로
+            return self.Next(self.on_clamp)
+        # 아직 이동 중 - 폴링하되 2s 넘게 멈춰있으면 포기
+        return self.StayUntil(2.0, self.on_stalled)
+
+    # 대기 step 진입 후 2s 안에 in_position 이 끝내 true 가 안 된 경우에만 도달.
+    # 흐름은 멈춰 설 수 없다 - 항상 정의된 어딘가로 도착한다.
+    def on_stalled(self):
+        self.axis.abort()
+        print("axis stalled before reaching target")
+        return self.Fail("stalled")
+
+    def on_clamp(self):
         return self.Done()
-    def on_timeout(self):
-        print("hw 가 끝내 ready 안 됨 - 중단")
-        return self.Fail("timeout")
 ```
 
-마감은 step 진입 기준이라 반복되는 Stay 틱이 시계를 뒤로 밀지 않습니다.
+`StayUntil` 없이 `wait_in_pos` 가 맨 `Stay()` 를 반환했다면, 누군가 라인이 죽은 걸 알아챌 때까지 무한히 돕니다. 이걸 쓰면 이동이 안 끝날 경우 `on_stalled` 에 *반드시* 도달합니다.
 
-> **가상 시계.** 타이머와 `StayUntil` 마감은 `rt.clock` 위에서 돕니다 - 배속/정지 가능한 시계: `rt.clock.set_scale(10)` 은 전체 흐름을 10배속 재생, `rt.clock.freeze()` / `.resume()` 은 모든 논리 타임아웃을 정지(예: e-stop 중 3s 타임아웃이 멈춤 동안 안 터지게). async/IO 데드라인은 실제 시간 유지.
+**복구 step 도 그냥 step 이라 어디로든 라우팅할 수 있습니다** - 아주 흔한 형태가 *재시도 후 포기* 입니다:
+
+```python
+    def wait_in_pos(self):
+        if self.axis.in_position():
+            return self.Next(self.on_clamp)
+        return self.StayUntil(2.0, self.on_retry)
+
+    def on_retry(self):
+        self.tries += 1
+        if self.tries >= 3:
+            print("axis failed after 3 tries"); return self.Fail("gave up")
+        self.axis.abort()
+        return self.Next(self.on_command)         # 재발행 -> 대기 step 재진입,
+                                                  # 2s 창이 다시 시작됨
+```
+
+`on_command` -> `wait_in_pos` 재진입은 새 step 진입이라, 시도마다 2s 마감이 새로 시작됩니다 - 수동 타이머 관리가 필요 없습니다. 마감은 step 진입 기준이라 반복되는 Stay 틱이 시계를 뒤로 밀지 않습니다.
+
+> **가상 시계.** 타이머와 `StayUntil` 마감은 `rt.clock` 위에서 돕니다 - 배속/정지 가능한 시계: `rt.clock.set_scale(10)` 은 전체 흐름을 10배속 재생, `rt.clock.freeze()` / `.resume()` 은 모든 논리 타임아웃을 정지(예: e-stop 중 2s 타임아웃이 멈춤 동안 안 터지게). async/IO 데드라인은 실제 시간 유지.
 
 ---
 
