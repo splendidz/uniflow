@@ -291,9 +291,13 @@ class Uniflow:
         self.async_value = fut.result()
         return self.Next(then)
 
-    def start(self, first_step: Callable[[], StepResult]) -> None:
-        """흐름을 시작한다. first_step 은 bound method (예: self.on_begin)."""
+    def start(self, first_step: Callable[[], StepResult]) -> bool:
+        """흐름을 first_step(bound method, 예: self.on_begin)에서 시작한다.
+        이미 흐름이 돌고 있으면 덮어쓰지 않고 False 를 반환한다(C++ StartFlow 와 동일) —
+        진행 중인 step 을 하이재킹하지 않는다. 다시 시작하려면 cancel() 후 호출."""
         with self._lock:
+            if self._flow_running:
+                return False
             self._current = first_step
             self._flow_running = True
             self._step_count = 0
@@ -309,6 +313,7 @@ class Uniflow:
         self._rt._observer.on_flow_started(self._name, getattr(first_step, "__name__", "?"))
         # 펌프가 자고 있으면 즉시 깨워서 첫 step 이 nap 만큼 늦게 도는 것을 막는다.
         self._rt.wake()
+        return True
 
     def cancel(self) -> None:
         """흐름을 즉시 Fail 로 멈춘다. 펌프/외부 스레드 모두 호출 가능."""
@@ -326,6 +331,18 @@ class Uniflow:
     def is_idle(self) -> bool:
         with self._lock:
             return not self._flow_running
+
+    @property
+    def current_step_name(self) -> str:
+        """현재 실행 중인 step 이름 (idle 이면 빈 문자열)."""
+        with self._lock:
+            return self._cur_name() if self._flow_running else ""
+
+    @property
+    def current_step_ordinal(self) -> int:
+        """현재 step 의 0-based 인덱스 (entry=0); idle 이면 -1."""
+        with self._lock:
+            return self._step_count if self._flow_running else -1
 
     def _cur_name(self) -> str:
         cur = self._current

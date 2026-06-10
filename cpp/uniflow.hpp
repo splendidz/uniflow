@@ -1562,6 +1562,21 @@ public:
     // asserts that guard against off-thread access.
     int                DriverIndex() const { return runtime_->driver_index(); }
     const std::string& CurrentStepDescription() const { return curr_step_description_; }
+    // Name of the step currently running ("(entry)" before the first Next,
+    // empty when idle). Copied under the op lock so it does not tear against
+    // the pump rewriting it on a transition.
+    std::string CurrentStepName() const
+    {
+        std::lock_guard<std::mutex> lk(op_mu_);
+        return curr_step_name_ ? std::string(curr_step_name_) : std::string();
+    }
+    // 0-based index of the current step within the running flow (0 = entry
+    // step); -1 when idle.
+    int CurrentStepOrdinal() const
+    {
+        std::lock_guard<std::mutex> lk(op_mu_);
+        return flow_running_ ? step_ordinal_ : -1;
+    }
 
 protected:
     // -- The four step intents. Return one from every step body. --
