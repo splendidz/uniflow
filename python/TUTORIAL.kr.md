@@ -224,14 +224,24 @@ class Quiet(uf.Observer):
     pass                                   # 아무것도 override 안 함 -> 출력 없음
 
 class MyObs(uf.Observer):
-    def on_step_changed(self, obj, prev, nxt, elapsed_ms, ticks):
-        print(f"{obj}: {prev} -> {nxt} ({elapsed_ms:.1f}ms)")
+    def on_step_changed(self, obj, prev, nxt, description, elapsed_ms, ticks):
+        print(f"{obj}: {prev} -> {nxt}  {description} ({elapsed_ms:.1f}ms)")
     def on_flow_ended(self, obj, action, steps, wall_ms, reason):
         if action is uf.StepAction.FAIL:
             print(f"{obj} FAILED: {reason}")
 
 rt = uf.Runtime(observer=MyObs())          # rt 의 모든 모듈이 이걸 씀
 ```
+
+`description` 은 step 이 `self.Describe(...)` 로 적은 한 줄 - "지금 뭘 하는지" 를 로그에 남기는 용도로, step 전환 시 한 번 찍히고 비워집니다:
+
+```python
+def wait_in_pos(self):
+    self.Describe("approaching ", self.target, " mm")    # on_step_changed 에 나타남
+    return self.Next(self.on_clamp) if self.axis.in_position() else self.Stay()
+```
+
+`module.current_step_description` 로 실시간 조회도 됩니다 (`current_step_name` / `current_step_ordinal` 로 흐름이 지금 어디인지도).
 
 ---
 

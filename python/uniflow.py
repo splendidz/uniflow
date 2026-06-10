@@ -37,10 +37,11 @@ class StepResult:
 class Observer:
     def on_flow_started(self, obj: str, first_step: str) -> None: ...
     def on_step_changed(self, obj: str, prev_step: str, next_step: str,
-                        elapsed_ms: float, ticks: int) -> None: ...
+                        description: str, elapsed_ms: float, ticks: int) -> None: ...
     def on_step_threw(self, obj: str, step: str, what: str) -> None: ...
     def on_async_submitted(self, obj: str, step: str) -> None: ...
-    def on_async_completed(self, obj: str, wait_ms: float, had_error: bool) -> None: ...
+    def on_async_completed(self, obj: str, wait_ms: float, had_error: bool,
+                           timed_out: bool) -> None: ...
     def on_flow_ended(self, obj: str, action: StepAction, steps: int,
                       wall_ms: float, reason: str) -> None: ...
 
@@ -58,9 +59,10 @@ class ConsoleObserver(Observer):
     def on_flow_started(self, obj, first_step):
         self._print(f"[{obj:<16}] FLOW START  -> {first_step}")
 
-    def on_step_changed(self, obj, prev_step, next_step, elapsed_ms, ticks):
+    def on_step_changed(self, obj, prev_step, next_step, description, elapsed_ms, ticks):
         arrow = f"{prev_step} -> {next_step}" if next_step else prev_step
-        self._print(f"[{obj:<16}] {arrow:<40} elapsed={elapsed_ms:.2f}ms tick x{ticks}")
+        self._print(f"[{obj:<16}] {arrow:<40} {description:<28} "
+                    f"elapsed={elapsed_ms:.2f}ms tick x{ticks}")
 
     def on_step_threw(self, obj, step, what):
         self._print(f"[{obj:<16}] {step:<40} [THREW] {what}")
@@ -68,8 +70,8 @@ class ConsoleObserver(Observer):
     def on_async_submitted(self, obj, step):
         self._print(f"[{obj:<16}] {step:<40} ASYNC SUBMIT")
 
-    def on_async_completed(self, obj, wait_ms, had_error):
-        tag = " [ERROR]" if had_error else ""
+    def on_async_completed(self, obj, wait_ms, had_error, timed_out):
+        tag = " [TIMEOUT]" if timed_out else (" [ERROR]" if had_error else "")
         self._print(f"[{obj:<16}] {'':<40} ASYNC DONE  wait={wait_ms:.2f}ms{tag}")
 
     def on_flow_ended(self, obj, action, steps, wall_ms, reason):
@@ -222,6 +224,8 @@ class Uniflow:
         self.uf_timer = UFTimer(rt._clock)
 
         self._current: Optional[Callable[[], StepResult]] = None
+        self._current_name = "?"     # 현재 step 이름 (인자 전달로 lambda 로 감싸도 보존)
+        self._desc = ""              # 현재 step 의 Describe() 한 줄 설명
         self._flow_running = False
 
         self._step_count = 0
@@ -236,6 +240,7 @@ class Uniflow:
         self._async: Optional[Future] = None
         self._async_t0 = 0.0
         self.async_value: Any = None
+        self.async_timed_out = False   # 직전 run_async 가 timeout 으로 끝났나 (then 에서 확인)
 
         rt._attach(self)
 
@@ -246,17 +251,27 @@ class Uniflow:
         return StepResult(StepAction.STAY)
 
     def StayUntil(self, timeout_sec: float,
-                  on_timeout: Callable[[], StepResult]) -> StepResult:
+                  on_timeout: Callable[..., StepResult],
+                  *args, **kwargs) -> StepResult:
         # 현재 step 을 계속 폴링하되, step 진입 후 timeout_sec 이 지나면(이 호출
         # 시점이 아니라 step 진입 기준) on_timeout step 으로 전이한다. step 단위
         # catch: 도착하지 않을 수도 있는 조건을 무한 폴링하는 대신 정리/복구 경로로.
+        # on_timeout 에도 Next 처럼 인자를 넘길 수 있다.
         return StepResult(StepAction.STAY,
-                          next_fn=on_timeout,
+                          next_fn=self._step_call(on_timeout, args, kwargs),
                           next_name=getattr(on_timeout, "__name__", "?"),
                           timeout_sec=timeout_sec)
 
-    def Next(self, fn: Callable[[], StepResult]) -> StepResult:
-        return StepResult(StepAction.NEXT, next_fn=fn,
+    @staticmethod
+    def _step_call(fn, args, kwargs):
+        # 인자가 있으면 0-인자 호출로 감싼다 -> 다음 step 이 fn(*args, **kwargs) 로 불림.
+        # 프레임워크는 step 을 0-인자로 호출하므로, 이름은 StepResult.next_name 으로 따로 보존.
+        return (lambda: fn(*args, **kwargs)) if (args or kwargs) else fn
+
+    def Next(self, fn: Callable[..., StepResult], *args, **kwargs) -> StepResult:
+        # C++ UF_NEXT(fn, args...) 처럼 다음 step 에 인자를 넘길 수 있다.
+        return StepResult(StepAction.NEXT,
+                          next_fn=self._step_call(fn, args, kwargs),
                           next_name=getattr(fn, "__name__", "?"))
 
     def Done(self) -> StepResult:
@@ -265,10 +280,16 @@ class Uniflow:
     def Fail(self, reason: str = "") -> StepResult:
         return StepResult(StepAction.FAIL, reason=reason)
 
+    def Describe(self, *parts) -> None:
+        # 현재 step 의 한 줄 설명(observer/로그용). step 전환 시 한 번 찍히고 비워진다.
+        # C++ Describe(...) 와 동일. 인자들을 문자열로 이어붙인다.
+        self._desc = "".join(str(p) for p in parts)
+
     # 블로킹 fn 을 풀에 넘기고 끝날 때까지 Stay, 완료되면 Next(then). 결과는
     # self.async_value, 예외가 나면 Fail.
     def run_async(self, fn: Callable[[], Any],
-                  then: Callable[[], StepResult]) -> StepResult:
+                  then: Callable[..., StepResult],
+                  timeout: Optional[float] = None) -> StepResult:
         if self._async is None:
             self._async = self._rt._executor.submit(fn)
             # 잡이 끝나는 즉시 펌프를 깨워서, 다음 스텝의 완료 캐치가 stay_sleep
@@ -276,29 +297,43 @@ class Uniflow:
             # 있으나 wake() 는 thread-safe.
             self._async.add_done_callback(lambda _f: self._rt.wake())
             self._async_t0 = time.monotonic()
+            self.async_timed_out = False
             self._rt._observer.on_async_submitted(self._name, self._cur_name())
             return self.Stay()
         if not self._async.done():
+            # timeout 은 실제 시간 기준(네트워크/IO 는 시뮬 배속·freeze 와 무관). 마감
+            # 초과면 워커를 버리고(계속 돌긴 함) then 으로 진행 - then 에서 self.
+            # async_timed_out 으로 확인. C++ UF_ASYNC_TIMEOUT / is_timeout() 과 동일.
+            if timeout is not None and (time.monotonic() - self._async_t0) >= timeout:
+                self._async = None
+                wait_ms = (time.monotonic() - self._async_t0) * 1000.0
+                self.async_value = None
+                self.async_timed_out = True
+                self._rt._observer.on_async_completed(self._name, wait_ms, False, True)
+                return self.Next(then)
             return self.Stay()
         fut = self._async
         self._async = None
         wait_ms = (time.monotonic() - self._async_t0) * 1000.0
         exc = fut.exception()
-        self._rt._observer.on_async_completed(self._name, wait_ms, exc is not None)
+        self._rt._observer.on_async_completed(self._name, wait_ms, exc is not None, False)
         if exc is not None:
             self.fail_exc = exc
             return self.Fail(f"async error: {exc!r}")
         self.async_value = fut.result()
         return self.Next(then)
 
-    def start(self, first_step: Callable[[], StepResult]) -> bool:
-        """흐름을 first_step(bound method, 예: self.on_begin)에서 시작한다.
+    def start(self, first_step: Callable[..., StepResult], *args, **kwargs) -> bool:
+        """흐름을 first_step(bound method, 예: self.on_begin)에서 시작한다. C++
+        UF_START_FLOW(mod, fn, args...) 처럼 entry step 에 인자를 넘길 수 있다.
         이미 흐름이 돌고 있으면 덮어쓰지 않고 False 를 반환한다(C++ StartFlow 와 동일) —
         진행 중인 step 을 하이재킹하지 않는다. 다시 시작하려면 cancel() 후 호출."""
         with self._lock:
             if self._flow_running:
                 return False
-            self._current = first_step
+            self._current = self._step_call(first_step, args, kwargs)
+            self._current_name = getattr(first_step, "__name__", "?")
+            self._desc = ""
             self._flow_running = True
             self._step_count = 0
             self._step_ticks = 0
@@ -324,6 +359,18 @@ class Uniflow:
             self.failed = True
             self.fail_reason = "cancelled"
 
+    def wait_until_idle(self, timeout: Optional[float] = None,
+                        poll: float = 0.01) -> bool:
+        """이 모듈의 흐름이 끝날 때까지 호출 스레드를 블록(이미 idle 이면 즉시 True).
+        펌프/step 안에서 부르면 안 됨. 전체 모듈 대기는 rt.wait_until_idle()."""
+        start = time.monotonic()
+        while True:
+            if self.is_idle():
+                return True
+            if timeout is not None and (time.monotonic() - start) >= timeout:
+                return False
+            time.sleep(poll)
+
     @property
     def name(self) -> str:
         return self._name
@@ -344,9 +391,14 @@ class Uniflow:
         with self._lock:
             return self._step_count if self._flow_running else -1
 
+    @property
+    def current_step_description(self) -> str:
+        """현재 step 의 Describe() 설명 (idle 이면 빈 문자열)."""
+        with self._lock:
+            return self._desc if self._flow_running else ""
+
     def _cur_name(self) -> str:
-        cur = self._current
-        return getattr(cur, "__name__", "?") if cur else "?"
+        return self._current_name
 
     # 펌프가 한 tick 호출. 전이(Next/Done/Fail)면 True.
     def _execute_once(self, observer: Observer) -> bool:
@@ -354,10 +406,10 @@ class Uniflow:
             if not self._flow_running:
                 return False
             step = self._current
+            prev_name = self._current_name
         if step is None:
             return False
 
-        prev_name = getattr(step, "__name__", "?")
         self._step_ticks += 1
         try:
             result = step()
@@ -374,10 +426,12 @@ class Uniflow:
                     (self._rt._clock.now() - self._step_t0_v) >= result.timeout_sec:
                 elapsed_ms = (time.monotonic() - self._step_t0) * 1000.0
                 observer.on_step_changed(self._name, prev_name,
-                                         result.next_name,
+                                         result.next_name, self._desc,
                                          elapsed_ms, self._step_ticks)
                 with self._lock:
                     self._current = result.next_fn
+                    self._current_name = result.next_name
+                    self._desc = ""
                     self._step_count += 1
                     self._step_t0 = time.monotonic()
                     self._step_t0_v = self._rt._clock.now()
@@ -389,9 +443,11 @@ class Uniflow:
         if result.action is StepAction.NEXT:
             elapsed_ms = (time.monotonic() - self._step_t0) * 1000.0
             observer.on_step_changed(self._name, prev_name, result.next_name,
-                                     elapsed_ms, self._step_ticks)
+                                     self._desc, elapsed_ms, self._step_ticks)
             with self._lock:
                 self._current = result.next_fn
+                self._current_name = result.next_name
+                self._desc = ""
                 self._step_count += 1
                 self._step_t0 = time.monotonic()
                 self._step_t0_v = self._rt._clock.now()

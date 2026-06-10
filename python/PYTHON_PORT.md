@@ -31,13 +31,13 @@ Core concepts (identical to the C++ edition):
 | `VirtualClock` | logical clock. `now()`, `set_scale(s)` (speed), `freeze()`/`resume()` (pause), `scale`/`frozen`. Tracks the real clock 1:1 by default. Applies to UFTimer/StayUntil only; async/IO and the pump nap stay on real time |
 | `UFTimer` | polling timer. `UFTimer(clock=None)` (real clock by default; pass `rt.clock` to follow that virtual clock), `init()` (=`restart`), `held_for(cond, duration)->bool` (True once `cond` has been **continuously** true for `duration`; any false reading resets and returns False; settling/debounce), `passed(duration)->bool` (fixed wait elapsed, no condition), `elapsed()` |
 | `Uniflow` | inheritance base. `__init__(rt, *, name=None)` |
-| ↳ step helpers | `Stay()`, `StayUntil(timeout_sec, on_timeout)` (keep polling the current step, but route to `on_timeout` once `timeout_sec` passes since step entry = a step-level catch), `Next(fn)`, `Done()`, `Fail(reason="")` |
+| ↳ step helpers | `Stay()`, `StayUntil(timeout_sec, on_timeout, *args, **kwargs)` (keep polling the current step, but route to `on_timeout` once `timeout_sec` passes since step entry = a step-level catch), `Next(fn, *args, **kwargs)` (like C++ `UF_NEXT(fn, args...)` - passes args to the next step), `Done()`, `Fail(reason="")`, `Describe(*parts)` (one-line "what am I doing" for logs; shown on the next transition then cleared) |
 | ↳ timer | `self.uf_timer` (built-in `UFTimer`) - **auto-init on start and every Next transition**. In a waiting step, `held_for(cond, duration)` checks whether the condition stayed stable for `duration` within that step (no manual `init()`). For measurement across step boundaries, use a separate `uf.UFTimer()` |
-| ↳ async | `run_async(fn, then)` - offload blocking work; the result is in `self.async_value`. When the job finishes it auto-`wake()`s the pump so the next step's completion-catch is not delayed by the poll interval |
-| ↳ control | `start(first_step)`, `cancel()`, `is_idle()`, `.name` |
+| ↳ async | `run_async(fn, then, timeout=None)` - offload blocking work; the result is in `self.async_value`. When the job finishes it auto-`wake()`s the pump. If `timeout` (real seconds) is exceeded, it abandons the worker, sets `self.async_timed_out=True`, and proceeds to `then` (check the flag there - like C++ `is_timeout()`) |
+| ↳ control | `start(first_step, *args, **kwargs)->bool` (args forwarded to the entry step; returns False if a flow is already running - does not hijack), `wait_until_idle(timeout=None)` (block until *this* module is idle), `cancel()`, `is_idle()`, `current_step_name` / `current_step_ordinal` / `current_step_description` (live "where is the flow now?"; `""`/`-1` when idle), `.name` |
 | `Runtime` | pump thread + `ThreadPoolExecutor` + Observer |
-| ↳ | `wait_until_idle(timeout)`, `cancel_all()`, `any_failed()`, `submit(fn)`, `set_pre_round(fn)`, `wake()` (wake a napping pump immediately; for external event threads), `clock` (this runtime's logical clock = `VirtualClock`; `rt.clock.set_scale(10)`/`.freeze()`), `stop()` |
-| `Observer` / `ConsoleObserver` | single exit for every event (flow/step/async/threw/ended) |
+| ↳ | `wait_until_idle(timeout)` (all modules), `cancel_all()`, `any_failed()`, `submit(fn)`, `set_pre_round(fn)`, `wake()` (wake a napping pump immediately; for external event threads), `clock` (this runtime's logical clock = `VirtualClock`; `rt.clock.set_scale(10)`/`.freeze()`), `stop()` |
+| `Observer` / `ConsoleObserver` | single exit for every event (flow/step/async/threw/ended). `on_step_changed(obj, prev, next, description, elapsed_ms, ticks)` carries the `Describe` text; `on_async_completed(obj, wait_ms, had_error, timed_out)` |
 
 Minimal use:
 

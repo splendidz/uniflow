@@ -224,14 +224,24 @@ class Quiet(uf.Observer):
     pass                                   # override nothing -> no output
 
 class MyObs(uf.Observer):
-    def on_step_changed(self, obj, prev, nxt, elapsed_ms, ticks):
-        print(f"{obj}: {prev} -> {nxt} ({elapsed_ms:.1f}ms)")
+    def on_step_changed(self, obj, prev, nxt, description, elapsed_ms, ticks):
+        print(f"{obj}: {prev} -> {nxt}  {description} ({elapsed_ms:.1f}ms)")
     def on_flow_ended(self, obj, action, steps, wall_ms, reason):
         if action is uf.StepAction.FAIL:
             print(f"{obj} FAILED: {reason}")
 
 rt = uf.Runtime(observer=MyObs())          # every module on rt uses it
 ```
+
+The `description` is whatever the step wrote with `self.Describe(...)` - a one-line "what am I doing right now" for logs, printed once when the step transitions and then cleared:
+
+```python
+def wait_in_pos(self):
+    self.Describe("approaching ", self.target, " mm")    # shows up in on_step_changed
+    return self.Next(self.on_clamp) if self.axis.in_position() else self.Stay()
+```
+
+You can also read it live with `module.current_step_description` (and `current_step_name` / `current_step_ordinal` for where the flow is right now).
 
 ---
 

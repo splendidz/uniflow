@@ -34,13 +34,13 @@
 | `VirtualClock` | 논리 시계. `now()`, `set_scale(s)`(배속), `freeze()`/`resume()`(정지), `scale`/`frozen`. 기본은 실제 시계 1:1 추종. UFTimer/StayUntil 에만 적용, async/IO·펌프 낮잠은 실제 시간 유지 |
 | `UFTimer` | 폴링 타이머. `UFTimer(clock=None)`(기본 실제 시계, `rt.clock` 주면 그 가상 시계 추종), `init()`(=`restart`), `held_for(cond, duration)→bool`(조건이 duration 동안 **연속으로** 참이면 True, 중간에 거짓이면 누적 리셋 후 False; settling/debounce 판정), `passed(duration)→bool`(조건없는 고정 대기 경과 여부), `elapsed()` |
 | `Uniflow` | 상속 베이스. `__init__(rt, *, name=None)` |
-| ↳ step 헬퍼 | `Stay()`, `StayUntil(timeout_sec, on_timeout)`(현재 step 을 계속 폴링하되 step 진입 후 timeout_sec 초과 시 on_timeout step 으로 자동 전이 = step 단위 catch), `Next(fn)`, `Done()`, `Fail(reason="")` |
+| ↳ step 헬퍼 | `Stay()`, `StayUntil(timeout_sec, on_timeout, *args, **kwargs)`(현재 step 을 계속 폴링하되 step 진입 후 timeout_sec 초과 시 on_timeout 으로 자동 전이 = step 단위 catch), `Next(fn, *args, **kwargs)`(C++ `UF_NEXT(fn, args...)` 처럼 다음 step 에 인자 전달), `Done()`, `Fail(reason="")`, `Describe(*parts)`(현재 step 의 "지금 뭐 하는지" 한 줄; 다음 전이 때 찍히고 비워짐) |
 | ↳ 타이머 | `self.uf_timer` (내장 `UFTimer`) — **start/매 Next 전이 시 자동 init**. 대기 step 에서 `held_for(cond, duration)` 로 조건이 그 step 안에서 duration 동안 안정적으로 유지됐는지 판정 (수동 `init()` 불필요). step 경계 누적 측정은 별도 `uf.UFTimer()` |
-| ↳ 비동기 | `run_async(fn, then)` — 블로킹 작업 offload, 완료 시 결과는 `self.async_value`. 잡이 끝나면 펌프를 자동 `wake()` 해서 다음 step 의 완료 캐치가 폴링 주기만큼 늦지 않게 함 |
-| ↳ 제어 | `start(first_step)`, `cancel()`, `is_idle()`, `.name` |
+| ↳ 비동기 | `run_async(fn, then, timeout=None)` — 블로킹 작업 offload, 결과는 `self.async_value`. 잡이 끝나면 펌프 자동 `wake()`. `timeout`(실제 초) 초과 시 워커를 버리고 `self.async_timed_out=True` 설정 후 `then` 으로 진행(거기서 플래그 확인 — C++ `is_timeout()` 과 동일) |
+| ↳ 제어 | `start(first_step, *args, **kwargs)->bool`(entry step 에 인자 전달; 이미 흐름이 돌면 False 반환 — 하이재킹 안 함), `wait_until_idle(timeout=None)`(*이 모듈* 만 idle 까지 블록), `cancel()`, `is_idle()`, `current_step_name` / `current_step_ordinal` / `current_step_description`(실시간 "흐름이 지금 어디?"; idle 이면 `""`/`-1`), `.name` |
 | `Runtime` | 펌프 스레드 + `ThreadPoolExecutor` + Observer |
-| ↳ | `wait_until_idle(timeout)`, `cancel_all()`, `any_failed()`, `submit(fn)`, `set_pre_round(fn)`, `wake()`(자고 있는 펌프를 즉시 깨움; 외부 이벤트 스레드용), `clock`(이 런타임 논리 시계 = `VirtualClock`; `rt.clock.set_scale(10)`/`.freeze()`), `stop()` |
-| `Observer` / `ConsoleObserver` | 모든 이벤트의 단일 출구 (flow/step/async/threw/ended) |
+| ↳ | `wait_until_idle(timeout)`(전체 모듈), `cancel_all()`, `any_failed()`, `submit(fn)`, `set_pre_round(fn)`, `wake()`(자고 있는 펌프를 즉시 깨움; 외부 이벤트 스레드용), `clock`(이 런타임 논리 시계 = `VirtualClock`; `rt.clock.set_scale(10)`/`.freeze()`), `stop()` |
+| `Observer` / `ConsoleObserver` | 모든 이벤트의 단일 출구 (flow/step/async/threw/ended). `on_step_changed(obj, prev, next, description, elapsed_ms, ticks)` 가 `Describe` 텍스트를 전달; `on_async_completed(obj, wait_ms, had_error, timed_out)` |
 
 최소 사용:
 
