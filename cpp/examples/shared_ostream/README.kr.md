@@ -1,6 +1,6 @@
 # shared_ostream
 
-> 🌐 언어: **한국어** | [English](README.en.md) &nbsp;|&nbsp; [<- 예제 갤러리](../../EXAMPLES.md)
+> 🌐 언어: **한국어** | [English](README.md) &nbsp;|&nbsp; [<- 예제 갤러리](../../../EXAMPLES.kr.md)
 
 가장 작은 예제. 같은 Runtime에 매단 모듈 두 개가 한 `std::ostringstream`에 락 없이 번갈아 적습니다. uniflow의 가장 본질적 성질을 *증명*하는 코드입니다: **같은 Runtime의 모든 step body는 한 스레드 위에서 돈다**. 모듈이 둘이든 열이든, 공유 자원에 mutex를 쓰지 않아도 race가 없습니다.
 
@@ -28,12 +28,12 @@
 콘솔 예제라 플랫폼 무관합니다.
 
 ```powershell
-cl /std:c++17 /EHsc /I . examples\shared_ostream\*.cpp /Fe:shared_ostream.exe
+cl /std:c++17 /EHsc /I cpp cpp\examples\shared_ostream\*.cpp /Fe:shared_ostream.exe
 shared_ostream.exe
 ```
 
 ```bash
-g++ -std=c++17 -O2 -pthread -I . examples/shared_ostream/*.cpp -o shared_ostream
+g++ -std=c++17 -O2 -pthread -I cpp cpp/examples/shared_ostream/*.cpp -o shared_ostream
 ./shared_ostream
 ```
 
@@ -54,5 +54,5 @@ PASS: shared log is race-free, order preserved
 
 ## 더 읽기
 
-- 한 Runtime, 여러 모듈, lock-free 공유: [TUTORIAL.md 챕터 5](../../TUTORIAL.md)
-- 전체 예제 갤러리: [EXAMPLES.md](../../EXAMPLES.md)
+- 한 Runtime, 여러 모듈, lock-free 공유: [TUTORIAL.kr.md 챕터 5](../../../TUTORIAL.kr.md)
+- 전체 예제 갤러리: [EXAMPLES.kr.md](../../../EXAMPLES.kr.md)

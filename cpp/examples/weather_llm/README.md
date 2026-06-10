@@ -1,6 +1,6 @@
 # weather_llm
 
-> 🌐 Language: [한국어](README.md) | **English** &nbsp;|&nbsp; [<- Example gallery](../../EXAMPLES.en.md)
+> 🌐 Language: [한국어](README.kr.md) | **English** &nbsp;|&nbsp; [<- Example gallery](../../../EXAMPLES.md)
 
 Real async I/O. A single module (`UF_Weather`) talks to the *outside world* across three steps:
 
@@ -34,10 +34,10 @@ It uses WinHTTP, so this is a Windows + MSVC example. Get a free API key from Go
 
 ```powershell
 # Visual Studio
-add examples\weather_llm\weather_llm.vcxproj to your solution and hit F5
+add cpp\examples\weather_llm\weather_llm.vcxproj to your solution and hit F5
 
 # CLI (MSVC)
-cl /std:c++17 /EHsc /I . examples\weather_llm\*.cpp /Fe:weather_llm.exe
+cl /std:c++17 /EHsc /I cpp cpp\examples\weather_llm\*.cpp /Fe:weather_llm.exe
 
 $env:GEMINI_API_KEY = "AIza...<key from aistudio.google.com>"
 weather_llm.exe
@@ -67,5 +67,5 @@ Sample run:
 
 ## Read more
 
-- UF_ASYNC and receiving results, timeouts/errors: [TUTORIAL.en.md chapters 6-7](../../TUTORIAL.en.md)
-- Full example gallery: [EXAMPLES.en.md](../../EXAMPLES.en.md)
+- UF_ASYNC and receiving results, timeouts/errors: [TUTORIAL.md chapters 6-7](../../../TUTORIAL.md)
+- Full example gallery: [EXAMPLES.md](../../../EXAMPLES.md)

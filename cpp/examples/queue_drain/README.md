@@ -1,6 +1,6 @@
 # queue_drain
 
-> 🌐 Language: [한국어](README.md) | **English** &nbsp;|&nbsp; [<- Example gallery](../../EXAMPLES.en.md)
+> 🌐 Language: [한국어](README.kr.md) | **English** &nbsp;|&nbsp; [<- Example gallery](../../../EXAMPLES.md)
 
 The classic "receiver thread -> queue -> worker thread" pattern, moved onto uniflow. `UF_Sender` pushes 1-10 messages into the queue every second, and `UF_Receiver` pulls them one at a time until the queue is empty.
 
@@ -31,15 +31,15 @@ It uses Win32 visualization, so this is a Windows + MSVC example.
 
 ```powershell
 # Visual Studio
-add examples\queue_drain\queue_drain.vcxproj to your solution and hit F5
+add cpp\examples\queue_drain\queue_drain.vcxproj to your solution and hit F5
 
 # CLI (MSVC)
-cl /std:c++17 /EHsc /I . examples\queue_drain\*.cpp /Fe:queue_drain.exe
+cl /std:c++17 /EHsc /I cpp cpp\examples\queue_drain\*.cpp /Fe:queue_drain.exe
 ```
 
 ---
 
 ## Read more
 
-- Inter-module communication and IsIdle polling: [TUTORIAL.en.md chapter 5, final chapter](../../TUTORIAL.en.md)
-- Full example gallery: [EXAMPLES.en.md](../../EXAMPLES.en.md)
+- Inter-module communication and IsIdle polling: [TUTORIAL.md chapter 5, final chapter](../../../TUTORIAL.md)
+- Full example gallery: [EXAMPLES.md](../../../EXAMPLES.md)

@@ -1,9 +1,9 @@
 # cnc_pickers
 
-> 🌐 Language: [한국어](README.md) | **English** &nbsp;|&nbsp; [<- Example gallery](../../EXAMPLES.en.md)
+> 🌐 Language: [한국어](README.kr.md) | **English** &nbsp;|&nbsp; [<- Example gallery](../../../EXAMPLES.md)
 
 <p align="center">
-  <img src="../../docs/videos/cnc_picker.gif" alt="cnc_pickers demo" width="720"/>
+  <img src="../../../docs/videos/cnc_picker.gif" alt="cnc_pickers demo" width="720"/>
 </p>
 
 uniflow's reference project. It runs a virtual CNC machining line on a single pump. The Load picker grabs raw stock from zone A and places it at zone B, the Stage machines it at B, and the Unload picker carries it from B out to zone C.
@@ -52,10 +52,10 @@ It uses Win32 visualization, so this is a Windows + MSVC example. A `.vcxproj` i
 
 ```powershell
 # Visual Studio
-add examples\cnc_pickers\cnc_pickers.vcxproj to your solution and hit F5
+add cpp\examples\cnc_pickers\cnc_pickers.vcxproj to your solution and hit F5
 
 # CLI (MSVC, vcvars64 environment)
-cl /std:c++17 /EHsc /I . examples\cnc_pickers\*.cpp /Fe:build\cnc_pickers.exe /Fo:build\
+cl /std:c++17 /EHsc /I cpp cpp\examples\cnc_pickers\*.cpp /Fe:build\cnc_pickers.exe /Fo:build\
 ```
 
 A line window opens, and step transitions are written to both the console and `cnc_pickers.log`. When you close the window, the delivered part count prints on exit:
@@ -68,7 +68,7 @@ parts delivered to Unload: 7
 
 ## Read more
 
-- The Cmd -> Wait polling pattern: [TUTORIAL.en.md chapters 3-4](../../TUTORIAL.en.md)
-- Writing a custom observer: [TUTORIAL.en.md chapter 8](../../TUTORIAL.en.md)
-- The orchestration pattern: [TUTORIAL.en.md final chapter](../../TUTORIAL.en.md)
-- Full example gallery: [EXAMPLES.en.md](../../EXAMPLES.en.md)
+- The Cmd -> Wait polling pattern: [TUTORIAL.md chapters 3-4](../../../TUTORIAL.md)
+- Writing a custom observer: [TUTORIAL.md chapter 8](../../../TUTORIAL.md)
+- The orchestration pattern: [TUTORIAL.md final chapter](../../../TUTORIAL.md)
+- Full example gallery: [EXAMPLES.md](../../../EXAMPLES.md)

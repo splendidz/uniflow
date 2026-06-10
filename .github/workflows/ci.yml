@@ -28,12 +28,12 @@ jobs:
           set -euo pipefail
           for t in tut1_roundrobin tut2_async tut3_observer; do
             echo "::group::build $t"
-            ${{ matrix.cxx }} -std=c++17 -O2 -pthread -I . examples/quickstart/$t.cpp -o $t
+            ${{ matrix.cxx }} -std=c++17 -O2 -pthread -I cpp cpp/examples/quickstart/$t.cpp -o $t
             ./$t
             echo "::endgroup::"
           done
           echo "::group::build shared_ostream"
-          ${{ matrix.cxx }} -std=c++17 -O2 -pthread -I . examples/shared_ostream/*.cpp -o shared_ostream
+          ${{ matrix.cxx }} -std=c++17 -O2 -pthread -I cpp cpp/examples/shared_ostream/*.cpp -o shared_ostream
           ./shared_ostream
           echo "::endgroup::"
 
@@ -47,10 +47,10 @@ jobs:
         shell: cmd
         run: |
           for %%t in (tut1_roundrobin tut2_async tut3_observer) do (
-            cl /nologo /std:c++17 /EHsc /I . examples\quickstart\%%t.cpp /Fe:%%t.exe || exit /b 1
+            cl /nologo /std:c++17 /EHsc /I cpp cpp\examples\quickstart\%%t.cpp /Fe:%%t.exe || exit /b 1
             %%t.exe || exit /b 1
           )
-          cl /nologo /std:c++17 /EHsc /I . examples\shared_ostream\*.cpp /Fe:shared_ostream.exe || exit /b 1
+          cl /nologo /std:c++17 /EHsc /I cpp cpp\examples\shared_ostream\*.cpp /Fe:shared_ostream.exe || exit /b 1
           shared_ostream.exe || exit /b 1
 
   # Win32 GUI examples are Windows-only and build (not run, since they open
@@ -66,5 +66,5 @@ jobs:
         shell: cmd
         run: |
           for %%e in (city_traffic cnc_pickers queue_drain message_dispatch weather_llm) do (
-            cl /nologo /std:c++17 /EHsc /I . examples\%%e\*.cpp /Fe:%%e.exe /link user32.lib gdi32.lib winhttp.lib || exit /b 1
+            cl /nologo /std:c++17 /EHsc /I cpp cpp\examples\%%e\*.cpp /Fe:%%e.exe /link user32.lib gdi32.lib winhttp.lib || exit /b 1
           )

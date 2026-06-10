@@ -97,6 +97,6 @@ rt.wait_until_idle()
 
 ## 5. 배치 / git
 
-- 정규 위치: 저장소 루트 `uniflow.py` (`uniflow.hpp` 의 형제). uniflow repo 에 올라간다.
-- 언어가 늘면(예: C#) 또는 한 포트가 파일 1개를 넘으면 `cpp/ python/ csharp/` 로 한 번에
-  재구성한다. 현재는 언어당 파일 1개라 루트 형제 배치를 유지.
+- 정규 위치: `python/uniflow.py` (C++ 형제는 `cpp/uniflow.hpp`). uniflow 모노레포에 함께 올라간다.
+- 언어별 디렉터리(`cpp/`, `python/`, 추후 `csharp/`)로 재구성 완료. 한 언어가 파일 1개를
+  넘으면 그 디렉터리 안에서 나눈다.

@@ -1,6 +1,6 @@
 # message_dispatch
 
-> 🌐 Language: [한국어](README.md) | **English** &nbsp;|&nbsp; [<- Example gallery](../../EXAMPLES.en.md)
+> 🌐 Language: [한국어](README.kr.md) | **English** &nbsp;|&nbsp; [<- Example gallery](../../../EXAMPLES.md)
 
 Three modules (`UF_Professor`, `UF_Friend`, `UF_Student`) cooperate through a shared mailbox. The professor sends assignments, the friend sends invitations to play, and the student handles them in arrival order. If the student lacks ability it trains, if too tired it sleeps, if ready it does the assignment - and playing is a separate chain.
 
@@ -29,16 +29,16 @@ It uses Win32 visualization, so this is a Windows + MSVC example.
 
 ```powershell
 # Visual Studio
-add examples\message_dispatch\message_dispatch.vcxproj to your solution and hit F5
+add cpp\examples\message_dispatch\message_dispatch.vcxproj to your solution and hit F5
 
 # CLI (MSVC)
-cl /std:c++17 /EHsc /I . examples\message_dispatch\*.cpp /Fe:message_dispatch.exe
+cl /std:c++17 /EHsc /I cpp cpp\examples\message_dispatch\*.cpp /Fe:message_dispatch.exe
 ```
 
 ---
 
 ## Read more
 
-- Conditional branching within a flow and async: [TUTORIAL.en.md chapters 2, 6](../../TUTORIAL.en.md)
-- Inter-module communication: [TUTORIAL.en.md chapter 5, final chapter](../../TUTORIAL.en.md)
-- Full example gallery: [EXAMPLES.en.md](../../EXAMPLES.en.md)
+- Conditional branching within a flow and async: [TUTORIAL.md chapters 2, 6](../../../TUTORIAL.md)
+- Inter-module communication: [TUTORIAL.md chapter 5, final chapter](../../../TUTORIAL.md)
+- Full example gallery: [EXAMPLES.md](../../../EXAMPLES.md)

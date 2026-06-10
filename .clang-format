@@ -1,4 +1,4 @@
-# uniflow-cpp code style — Allman braces, 4-space indent.
+# uniflow code style — Allman braces, 4-space indent.
 Language:        Cpp
 BasedOnStyle:    LLVM
 BreakBeforeBraces: Allman

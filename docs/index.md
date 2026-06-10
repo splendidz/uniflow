@@ -1,5 +1,5 @@
 ---
-title: uniflow-cpp
+title: uniflow
 description: Run dozens of concurrent flows on a single thread - a header-only C++17 cooperative-scheduling framework (reactor + worker-pool), zero deps.
 ---
 
@@ -10,7 +10,7 @@ description: Run dozens of concurrent flows on a single thread - a header-only C
 
 ## Dozens of flows running at once does not mean you need dozens of threads.
 
-Lock contention, critical sections, deadlocks, and a thread (plus its share of bugs) growing per flow - all of that arrives the moment you reach for multithreading. **uniflow-cpp** puts those flows onto a single-threaded cooperative scheduler as chains of step functions. You write the step functions in the order your thinking flows; the framework handles yielding, waking, and serialization.
+Lock contention, critical sections, deadlocks, and a thread (plus its share of bugs) growing per flow - all of that arrives the moment you reach for multithreading. **uniflow** puts those flows onto a single-threaded cooperative scheduler as chains of step functions. You write the step functions in the order your thinking flows; the framework handles yielding, waking, and serialization.
 
 It is the proven **reactor + worker-pool** model (the Node.js / libuv lineage) packaged as step-function chains in a **single C++17 header** with **zero external dependencies**.
 
@@ -50,9 +50,9 @@ Two such modules on one Runtime run their step chains interleaved, one step at a
 
 ## Get started
 
-- [Read the docs on GitHub](https://github.com/splendidz/uniflow-cpp) ([English README](https://github.com/splendidz/uniflow-cpp/blob/main/README.en.md))
-- [Tutorials](https://github.com/splendidz/uniflow-cpp/blob/main/TUTORIAL.en.md) - one concept per chapter
-- [Examples](https://github.com/splendidz/uniflow-cpp/blob/main/EXAMPLES.en.md) - six working projects
-- [Run the quickstart in your browser (Codespaces)](https://codespaces.new/splendidz/uniflow-cpp)
+- [Read the docs on GitHub](https://github.com/splendidz/uniflow) ([English README](https://github.com/splendidz/uniflow/blob/main/README.md))
+- [Tutorials](https://github.com/splendidz/uniflow/blob/main/TUTORIAL.md) - one concept per chapter
+- [Examples](https://github.com/splendidz/uniflow/blob/main/EXAMPLES.md) - six working projects
+- [Run the quickstart in your browser (Codespaces)](https://codespaces.new/splendidz/uniflow)
 
-Released under the [MIT License](https://github.com/splendidz/uniflow-cpp/blob/main/LICENSE).
+Released under the [MIT License](https://github.com/splendidz/uniflow/blob/main/LICENSE).

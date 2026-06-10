@@ -1,6 +1,6 @@
 # message_dispatch
 
-> 🌐 언어: **한국어** | [English](README.en.md) &nbsp;|&nbsp; [<- 예제 갤러리](../../EXAMPLES.md)
+> 🌐 언어: **한국어** | [English](README.md) &nbsp;|&nbsp; [<- 예제 갤러리](../../../EXAMPLES.kr.md)
 
 세 모듈(`UF_Professor`, `UF_Friend`, `UF_Student`)이 공유 메일박스로 협력합니다. 교수는 과제를, 친구는 놀자는 메시지를 던지고, 학생은 받은 순서로 처리합니다. 학생은 능력이 부족하면 훈련, 너무 지치면 잠, 충분하면 과제 수행 - 놀이는 별도 chain입니다.
 
@@ -29,16 +29,16 @@ Win32 시각화를 쓰므로 Windows + MSVC 환경입니다.
 
 ```powershell
 # Visual Studio
-examples\message_dispatch\message_dispatch.vcxproj 를 솔루션에 추가하고 F5
+cpp\examples\message_dispatch\message_dispatch.vcxproj 를 솔루션에 추가하고 F5
 
 # CLI (MSVC)
-cl /std:c++17 /EHsc /I . examples\message_dispatch\*.cpp /Fe:message_dispatch.exe
+cl /std:c++17 /EHsc /I cpp cpp\examples\message_dispatch\*.cpp /Fe:message_dispatch.exe
 ```
 
 ---
 
 ## 더 읽기
 
-- 한 flow 안의 조건부 분기와 async: [TUTORIAL.md 챕터 2, 6](../../TUTORIAL.md)
-- 모듈 간 통신: [TUTORIAL.md 챕터 5, 마지막 챕터](../../TUTORIAL.md)
-- 전체 예제 갤러리: [EXAMPLES.md](../../EXAMPLES.md)
+- 한 flow 안의 조건부 분기와 async: [TUTORIAL.kr.md 챕터 2, 6](../../../TUTORIAL.kr.md)
+- 모듈 간 통신: [TUTORIAL.kr.md 챕터 5, 마지막 챕터](../../../TUTORIAL.kr.md)
+- 전체 예제 갤러리: [EXAMPLES.kr.md](../../../EXAMPLES.kr.md)

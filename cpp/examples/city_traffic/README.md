@@ -1,9 +1,9 @@
 # city_traffic
 
-> 🌐 Language: [한국어](README.md) | **English** &nbsp;|&nbsp; [<- Example gallery](../../EXAMPLES.en.md)
+> 🌐 Language: [한국어](README.kr.md) | **English** &nbsp;|&nbsp; [<- Example gallery](../../../EXAMPLES.md)
 
 <p align="center">
-  <img src="../../docs/videos/city_traffic.gif" alt="city_traffic demo" width="720"/>
+  <img src="../../../docs/videos/city_traffic.gif" alt="city_traffic demo" width="720"/>
 </p>
 
 uniflow's grand finale demo. Dozens of cars, each an independent uniflow module, accelerate/stop/turn around a city forever while watching shared traffic lights and the car ahead.
@@ -53,7 +53,7 @@ It uses Win32 GDI, so this is a Windows + MSVC example. `user32`/`gdi32` are lin
 
 ```powershell
 # inside a vcvars64 environment
-cl /std:c++17 /EHsc /I . examples\city_traffic\*.cpp /Fe:build\city_traffic.exe /Fo:build\
+cl /std:c++17 /EHsc /I cpp cpp\examples\city_traffic\*.cpp /Fe:build\city_traffic.exe /Fo:build\
 build\city_traffic.exe
 ```
 
@@ -72,6 +72,6 @@ Close the window and `App::Shutdown()` requests a stop, waits for every module t
 
 ## Read more
 
-- Cooperative scheduling and lock-free sharing basics: [TUTORIAL.en.md chapters 3, 5](../../TUTORIAL.en.md)
-- Orchestration / state-polling pattern: [TUTORIAL.en.md final chapter](../../TUTORIAL.en.md)
-- Full example gallery: [EXAMPLES.en.md](../../EXAMPLES.en.md)
+- Cooperative scheduling and lock-free sharing basics: [TUTORIAL.md chapters 3, 5](../../../TUTORIAL.md)
+- Orchestration / state-polling pattern: [TUTORIAL.md final chapter](../../../TUTORIAL.md)
+- Full example gallery: [EXAMPLES.md](../../../EXAMPLES.md)
