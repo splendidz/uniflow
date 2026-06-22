@@ -1,0 +1,120 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Linker files
+*.ilk
+
+# Debugger Files
+*.pdb
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+*.so.*
+
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Build directories
+build/
+Build/
+build-*/
+
+# CMake generated files
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+install_manifest.txt
+compile_commands.json
+
+# Temporary files
+*.tmp
+*.log
+*.bak
+*.swp
+
+# vcpkg
+vcpkg_installed/
+
+# debug information files
+*.dwo
+
+# test output & cache
+Testing/
+.cache/
+
+# Visual Studio local state
+.vs/
+*.vcxproj.user
+*.VC.db
+*.VC.opendb
+*.suo
+*.sdf
+*.opensdf
+
+# MSBuild per-config output directories.
+# This is what makes "examples/pick_and_place/pick_and_place/x64", "examples/<x>/x64", etc
+# spam git status. They are pure build intermediates.
+**/x64/
+**/Win32/
+**/Debug/
+**/Release/
+
+# MSBuild incremental + log artifacts.
+*.exp
+*.iobj
+*.ipdb
+*.tlog
+*.idb
+
+# .NET build output (C# examples).
+**/bin/
+**/obj/
+
+# Python bytecode cache.
+__pycache__/
+*.pyc
+
+# IDE / editor noise not covered above.
+.vscode/
+.idea/
+
+# Claude Code local state: settings, agent/session data, and any working
+# notes/history used while iterating with the assistant. Not for the repo.
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+
+# OS metadata.
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# Local-only docs (design notes, GitHub Pages, diagrams) - not published.
+docs/

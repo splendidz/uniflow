@@ -1,0 +1,30 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files"><UniqueIdentifier>{1beefc9c-ea2f-44c8-a854-dfca64fc8d88}</UniqueIdentifier><Extensions>cpp;c;cc;cxx</Extensions></Filter>
+    <Filter Include="Header Files"><UniqueIdentifier>{3d365a12-f636-4793-a22c-7fd47f348a2e}</UniqueIdentifier><Extensions>h;hpp;hxx</Extensions></Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="console.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="globals.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="mailbox.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="main.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="snapshot.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="uf_friend.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="uf_professor.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="uf_student.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="uf_visualization.cpp"><Filter>Source Files</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\..\uniflow.hpp"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="app.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="console.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="globals.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="mailbox.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="snapshot.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="uf_friend.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="uf_professor.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="uf_student.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="uf_visualization.h"><Filter>Header Files</Filter></ClInclude>
+  </ItemGroup>
+</Project>

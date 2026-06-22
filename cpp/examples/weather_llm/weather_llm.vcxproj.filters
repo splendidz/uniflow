@@ -1,0 +1,18 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files"><UniqueIdentifier>{9ad60782-2869-4e07-b1e2-b30bd0359e66}</UniqueIdentifier><Extensions>cpp;c;cc;cxx</Extensions></Filter>
+    <Filter Include="Header Files"><UniqueIdentifier>{62ae3e98-7c7f-487a-b375-2d0f95ef9eeb}</UniqueIdentifier><Extensions>h;hpp;hxx</Extensions></Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="http_client.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="main.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="uf_weather.cpp"><Filter>Source Files</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\..\uniflow.hpp"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="app.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="http_client.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="uf_weather.h"><Filter>Header Files</Filter></ClInclude>
+  </ItemGroup>
+</Project>
