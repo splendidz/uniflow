@@ -241,9 +241,9 @@ class App:
         #
         # All-Stay rounds (everyone polling) should be short so motion and the
         # ~30 fps renderer stay smooth (sleeps are in SECONDS).
-        cfg = uniflow.Config(idle_sleep=0.001,
-                             stay_sleep=0.005,
-                             step_interval_sleep=0.0)
+        cfg = uniflow.Config(idle_sleep_sec=0.001,
+                             stay_sleep_sec=0.005,
+                             step_interval_sleep_sec=0.0)
         self.rt = uniflow.Runtime(observer=uniflow.Observer(), config=cfg)
 
         # Phase 1: construct. renderer then runners.

@@ -14,7 +14,7 @@ import uniflow
 
 > **Examples.** The six worked examples referenced here live in [python/examples](examples/) - `simulator.py`, `shared_ostream.py`, `message_dispatch.py`, `pick_and_place.py`, `queue_drain.py`, `city_traffic.py`. They mirror the C++ set in [../cpp/examples](../cpp/examples/) and the C# set in [../cs/examples](../cs/examples/), so the same program reads alike in all three languages.
 
-> **Units.** Durations in the Python port are **seconds** (the C++ port uses milliseconds). `rt.clock.Now()`, `UFTimer`, and `StayUntil` deadlines are all in seconds.
+> **Units.** Durations in the Python port are **seconds** (the C++ port uses milliseconds). `rt.clock.Now()`, `UFTimer`, and `StayTimeout` / `StayUntil` deadlines are all in seconds.
 
 ---
 
@@ -99,9 +99,9 @@ Arguments can be passed forward: `self.Next(self.Step2_Wait, job_id)` calls `Ste
 
 ## Chapter 3. Polling with `Stay()` and the timer
 
-Return `self.Stay()` to re-run the same step next round - for polling a flag or waiting on another module. The pump rests `stay_sleep` (default 20 ms) between all-Stay rounds.
+Return `self.Stay()` to re-run the same step next round - for polling a flag or waiting on another module. The pump rests `stay_sleep_sec` (default 20 ms) between all-Stay rounds.
 
-Because you can never `sleep` in a step, *time* is expressed with a timer you poll. Every module has a built-in `self.uf_timer` (bound to the runtime clock) that is **re-armed on every `Next` transition**, so in a waiting step you read it from the module via `self.flow()`. For a timer scoped to a single task it is often cleaner to own one and arm it in `OnEnter()`:
+Because you can never `sleep` in a step, *time* is expressed with a timer you poll. Every module has a built-in `self.uf_timer` (bound to the runtime clock) that is **re-armed on every step change** - a `Next`, a `StayTimeout` / `StayUntil` timeout, a task switch, or flow start - but **not** on a `Stay`, so within one step it keeps counting while you poll. Read it from the module via `self.flow()`. To auto-reset your own member timers the same way, create them with `self.NewAutoTimer()`; for a timer you reset yourself, own a plain `UFTimer` and arm it in `OnEnter()`:
 
 ```python
 import uniflow
@@ -137,6 +137,17 @@ class Flow_WaitReady(uniflow.Uniflow):
 - `timer.Passed(d)` - have `d` seconds elapsed since the timer was armed?
 - `timer.HeldFor(cond, d)` - has `cond` been continuously true for `d`? (a single false reading resets it)
 - `timer.Elapsed()` - the raw seconds, handy for pacing / progress.
+
+The wait-with-settle pattern above (poll a condition, hold it for `d`, else give up) is common enough that `StayUntil` folds it into one call: a wait condition, a settle window, and a timeout catch. The condition is polled each round; once it has stayed true for `settle_sec` the step goes to `success`, but if `timeout_sec` elapses first it goes to the timeout target instead. The argument order is `condition, settle_sec, success, timeout_sec, timeout_step`:
+
+```python
+def Step1_Wait(self):
+    # wait for hardware_ready, hold it 0.05s to settle; give up after 5s
+    return self.StayUntil(hardware_ready, 0.05, self.Step2_Go,
+                          5.0, self.Step_Timeout)
+```
+
+(For a plain timeout escape where the body decides the success path itself, use `StayTimeout(timeout_sec, timeout_step)` - see Chapter 6.)
 
 `OnEnter()` runs once each time the task is entered, before its first step - the place to re-arm per-task state. Override `Entry()` to name the first step.
 
@@ -232,7 +243,7 @@ class Flow_Worker(uniflow.Uniflow):
             return self.Done()
 ```
 
-While the job runs the pump keeps driving other modules. When the job finishes it wakes the pump, so the next `Step2_Wait` poll catches the result immediately rather than after a full `stay_sleep`.
+While the job runs the pump keeps driving other modules. When the job finishes it wakes the pump, so the next `Step2_Wait` poll catches the result immediately rather than after a full `stay_sleep_sec`.
 
 `AsyncResult(id)` returns an `AsyncOutcome` with `.state` and these predicates: `.ok()` (Done - `.return_value` is engaged), `.pending()` (still in flight), `.failed()` (the worker threw), `.is_timeout()` (missed its deadline), `.found()` (the id matched a live slot). A bad / cleared id (including `0`) reads back as `NotFound`. The module also offers `self.AnyAsyncPending()` and `self.ClearAsync()` (abandon every in-flight worker).
 
@@ -242,11 +253,11 @@ To give the job a deadline, pass `timeout_sec` (real seconds, the 3rd argument):
 
 ---
 
-## Chapter 6. Step timeouts - `StayUntil`
+## Chapter 6. Step timeouts - `StayTimeout`
 
 `SubmitAsync` handles a *job* that overran. A different case is commanding some hardware and then `Stay()`-polling a "done" flag or sensor, where the signal may never arrive. With a jammed axis or a stuck valve, a bare `Stay()` loop polls indefinitely, and the line hangs with no error, which on a real machine is a serious failure mode.
 
-`self.StayUntil(timeout_sec, on_timeout)` is a `Stay()` with a deadline: keep polling this step, but if `timeout_sec` of **logical time** passes *since the step was entered*, route to `on_timeout` instead. That step acts as a `catch` - a guaranteed exit to a known recovery path.
+`self.StayTimeout(timeout_sec, on_timeout)` is a `Stay()` with a deadline: keep polling this step, but if `timeout_sec` of **logical time** passes *since the step was entered*, route to `on_timeout` instead. That step acts as a `catch` - a guaranteed exit to a known recovery path. The body still owns the happy path (it returns `Next`/`Done` itself); the deadline only guarantees an exit if the wait never resolves. (To also fold the wait condition and a settle window into the call, use `StayUntil` from Chapter 3.)
 
 The full pattern - command, wait-with-deadline, recover:
 
@@ -275,7 +286,7 @@ class Flow_Move(uniflow.Uniflow):
             if self.flow().axis.in_position():    # happy path
                 return self.Next(self.Step3_Clamp)
             # still moving - poll, but give up if it stalls past 2s
-            return self.StayUntil(2.0, self.Step_Stalled)
+            return self.StayTimeout(2.0, self.Step_Stalled)
 
         # reached ONLY if in_position never became true within 2s of entering the
         # wait step. The flow cannot hang - it always lands somewhere defined.
@@ -288,7 +299,7 @@ class Flow_Move(uniflow.Uniflow):
             return self.Done()
 ```
 
-Without `StayUntil`, `Step2_WaitInPos` returning a bare `Stay()` would spin until someone notices the line is dead. With it, reaching `Step_Stalled` is guaranteed if the move does not complete.
+Without `StayTimeout`, `Step2_WaitInPos` returning a bare `Stay()` would spin until someone notices the line is dead. With it, reaching `Step_Stalled` is guaranteed if the move does not complete.
 
 The recovery step is itself a step, so it can route anywhere. A common shape is *retry, then give up*:
 
@@ -296,7 +307,7 @@ The recovery step is itself a step, so it can route anywhere. A common shape is 
         def Step2_WaitInPos(self):
             if self.flow().axis.in_position():
                 return self.Next(self.Step3_Clamp)
-            return self.StayUntil(2.0, self.Step_Retry)
+            return self.StayTimeout(2.0, self.Step_Retry)
 
         def Step_Retry(self):
             f = self.flow()
@@ -311,7 +322,7 @@ The recovery step is itself a step, so it can route anywhere. A common shape is 
 
 Re-entering `Step1_Command` -> `Step2_WaitInPos` is a fresh step entry, so the 2s deadline starts over for each attempt, with no manual timer bookkeeping. The deadline is measured from step entry, so the repeated Stay ticks do not push it back.
 
-> **Virtual clock.** The timer and `StayUntil` deadlines run on `rt.clock`, which you can scale or freeze: `rt.clock.SetScale(10)` plays the whole flow back 10x; `rt.clock.Freeze()` / `.Resume()` holds every logical timeout (e.g. during an e-stop, a 2s timeout will not fire while paused). Async / IO deadlines stay on real time. The `simulator.py` example drives all of this live from the keyboard.
+> **Virtual clock.** The timer and `StayTimeout` / `StayUntil` deadlines run on `rt.clock`, which you can scale or freeze: `rt.clock.SetScale(10)` plays the whole flow back 10x; `rt.clock.Freeze()` / `.Resume()` holds every logical timeout (e.g. during an e-stop, a 2s timeout will not fire while paused). Async / IO deadlines stay on real time. The `simulator.py` example drives all of this live from the keyboard.
 
 ---
 

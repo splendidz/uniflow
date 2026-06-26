@@ -26,7 +26,7 @@ cl /std:c++17 /EHsc /I . tutorial\chap01.cpp /Fe:chap01.exe
 g++ -std=c++17 -O2 -pthread -I . tutorial/chap01.cpp -o chap01
 ```
 
-> 모든 챕터는 `#include "uniflow.hpp"` 한 줄로 시작한다. 추가 의존성은 없다. 필요한 매크로는 `UF_FN(step)` 하나뿐이며, step 함수를 포인터와 라벨 쌍으로 만들어 `Next` / `StayUntil` / `SubmitAsync` 에 넘긴다.
+> 모든 챕터는 `#include "uniflow.hpp"` 한 줄로 시작한다. 추가 의존성은 없다. 필요한 매크로는 `UF_FN(step)` 하나뿐이며, step 함수를 포인터와 라벨 쌍으로 만들어 `Next` / `StayTimeout` / `StayUntil` / `SubmitAsync` 에 넘긴다.
 
 ---
 
@@ -226,9 +226,11 @@ t.HeldFor(cond, 50ms);     // bool: has 'cond' been continuously true for 50ms?
 
 **보관 위치.** step을 넘나드는 타이머(step A에서 무장, step B에서 체크)는 step보다 오래 살아야 하므로 **태스크의 멤버**로 두고 `OnEnter()` 에서 재무장한다. 위 `t_` 가 이에 해당한다. 타이머가 태스크에 속하므로 모든 `Stay()` 재진입을 견디고, 다음 태스크 진입에서 리셋되며 수동 관리가 필요 없다.
 
+**내장 per-step 타이머.** 모든 모듈은 step에서 `flow().StepTimer()` 로 닿는 내장 타이머도 가진다. 태스크 진입에서 리셋되는 per-task `TaskContext::Elapsed()` 와 달리, 이건 **모든 step 전환**(`Next`, `StayUntil` 타임아웃, 태스크 전환, flow 시작)에서 재무장되지만 `Stay` 에서는 안 되므로 멤버 선언 없이 현재 step 안의 경과를 잰다. 직접 만든 멤버 타이머에 같은 auto-reset을 주려면 평범한 `UFTimer` 대신 `flow().NewAutoTimer()` 로 만들면 된다 - 모듈이 등록된 모든 타이머를 step 전환마다 재무장한다. 셀프로 리셋하는 `UFTimer` 는 영향받지 않는다.
+
 > **배속·freeze 되는 하나의 시계.** 타이머를 런타임에 바인딩하면 - `uniflow::UFTimer t{rt.clock()}` - 그 런타임의 가상 시계를 따른다. `rt.clock().SetScale(10)` 은 전체 흐름을 10배속 재생하고, `rt.clock().Freeze()` / `.Resume()` 은 모든 논리 타임아웃을 정지한다(예: e-stop 중 3초 타임아웃이 라인 멈춤 동안 터지지 않게). 그냥 `UFTimer{}` 는 실제 시간을 쓴다. async/IO 데드라인은 배속과 무관하게 항상 실제 시간이다. 챕터 10에서 다룬다.
 
-조건을 폴링하되 **영영 안 오면 복구 step으로 빠지는** 경우는 챕터 7의 `StayUntil` 을 참고한다.
+조건을 폴링하되 **영영 안 오면 복구 step으로 빠지는** 경우는 챕터 7의 `StayTimeout` / `StayUntil` 을 참고한다.
 
 ---
 
@@ -520,11 +522,11 @@ StepResult Step2_After(uniflow::AsyncId id)
 
 `AsyncOutcome<T>` 가 슬롯을 분류한다 - `is_timeout()`, `failed()`, `ok()`, `pending()` - 그래서 없는 결과를 역참조할 일이 없다. (`.value()` 나 `.exception()` 은 없다. 값은 `return_value` 에 있고 `ok()` 일 때만 engaged된다.)
 
-### step 데드라인 - `StayUntil`, step 단위 `catch`
+### step 데드라인 - `StayTimeout`, step 단위 `catch`
 
 잡을 기다리는 것이 아닐 때가 많다. 하드웨어에 명령을 내려놓고 "완료" 플래그·센서·피어 모듈 상태를 `Stay()` 로 폴링하는 경우이다. 그것이 영영 안 오면 - 축이 끼이거나, 엔코더가 끊기거나, 밸브가 멈추면 - 맨 `Stay()` 루프는 무한히 폴링하고, 라인은 에러도 없이 조용히 멈춰 선다. 실제 장비에서 이는 최악의 결과 중 하나이다.
 
-`StayUntil(dur, UF_FN(fn))` 은 **마감이 달린 `Stay()`** 이다: 이 step을 계속 폴링하되, step에 진입한 시점부터 `dur` 이 지나면 step `fn` 으로 빠진다. `fn` 이 곧 `catch` 이며, 정해진 복구 경로로의 보장된 탈출구이다.
+`StayTimeout(dur, UF_FN(fn))` 은 **마감이 달린 `Stay()`** 이다: 이 step을 계속 폴링하되, step에 진입한 시점부터 `dur` 이 지나면 step `fn` 으로 빠진다. `fn` 이 곧 `catch` 이며, 정해진 복구 경로로의 보장된 탈출구이다. (성공 경로는 여전히 본문이 소유한다 - 본문이 직접 `Next`/`Done` 을 반환하고, 마감은 대기가 끝내 안 풀릴 때의 탈출만 보장한다.)
 
 전체 패턴은 명령, 마감 걸린 대기, 복구이다:
 
@@ -546,7 +548,7 @@ StepResult Step2_WaitInPos()
         return Next(UF_FN(Step3_Clamp));
     }
     // still moving - keep polling, but give up if it stalls past 2s
-    return StayUntil(2000ms, UF_FN(Step_Stalled));
+    return StayTimeout(2000ms, UF_FN(Step_Stalled));
 }
 
 // Reached ONLY if InPosition never became true within 2s of entering the
@@ -559,7 +561,7 @@ StepResult Step_Stalled()
 }
 ```
 
-`StayUntil` 없이 `Step2_WaitInPos` 가 맨 `Stay()` 를 반환했다면, 누군가 라인이 죽은 것을 알아챌 때까지 무한히 돈다. 이것을 쓰면 이동이 끝나지 않을 경우 `Step_Stalled` 에 반드시 도달한다. 흐름은 늘 정의된 상태로 전진한다.
+`StayTimeout` 없이 `Step2_WaitInPos` 가 맨 `Stay()` 를 반환했다면, 누군가 라인이 죽은 것을 알아챌 때까지 무한히 돈다. 이것을 쓰면 이동이 끝나지 않을 경우 `Step_Stalled` 에 반드시 도달한다. 흐름은 늘 정의된 상태로 전진한다.
 
 **복구 step도 일반 step이므로 어디로든 라우팅할 수 있다.** 흔한 형태는 재시도 후 포기이다:
 
@@ -570,7 +572,7 @@ StepResult Step2_WaitInPos()
     {
         return Next(UF_FN(Step3_Clamp));
     }
-    return StayUntil(2000ms, UF_FN(Step_Retry));
+    return StayTimeout(2000ms, UF_FN(Step_Retry));
 }
 
 StepResult Step_Retry()
@@ -590,9 +592,9 @@ StepResult Step_Retry()
 
 알아둘 세 가지:
 
-- **마감은 `StayUntil` 호출 시점이 아니라 step 진입 기준이다.** 매 폴링 틱마다 반환하지만 시계는 틱마다 리셋되지 않는다. 2s 폴링하는 step은 정확히 2s에 타임아웃된다.
+- **마감은 `StayTimeout` 호출 시점이 아니라 step 진입 기준이다.** 매 폴링 틱마다 반환하지만 시계는 틱마다 리셋되지 않는다. 2s 폴링하는 step은 정확히 2s에 타임아웃된다.
 - **논리 시간이다.** 마감은 런타임 시계(챕터 3의 `rt.clock()`) 위에서 돌므로 `Freeze()` 하면 멈추고(e-stop 중 2s 타임아웃이 터지지 않음) `SetScale` 로 스케일된다. `SubmitAsync` 데드라인은 실제 시간을 유지한다.
-- **타임아웃 둘, 역할 둘.** `SubmitAsync` 타임아웃은 "이 잡이 T 안에 끝나야 함"을 뜻한다(폴링할 때 `is_timeout()` 을 읽는다). `StayUntil` 은 "이 step이 T 안에 진전돼야 함"을 뜻한다(복구 step으로 빠진다). 앞은 async 작업에, 뒤는 폴링 조건에 쓴다.
+- **타임아웃 둘, 역할 둘.** `SubmitAsync` 타임아웃은 "이 잡이 T 안에 끝나야 함"을 뜻한다(폴링할 때 `is_timeout()` 을 읽는다). `StayTimeout` 은 "이 step이 T 안에 진전돼야 함"을 뜻한다(복구 step으로 빠진다). 앞은 async 작업에, 뒤는 폴링 조건에 쓴다.
 
 챕터 3의 `HeldFor` 와도 짝이 된다. 플래그가 안정되길 요구하되, 끝내 정착하지 않으면 빠진다:
 
@@ -603,10 +605,22 @@ StepResult Step2_WaitReady()
     {
         return Next(UF_FN(Step3_Done));
     }
-    return StayUntil(3000ms, UF_FN(Step_Timeout));            // never settled -> recover
+    return StayTimeout(3000ms, UF_FN(Step_Timeout));            // never settled -> recover
 }
 // settle_ is a UFTimer member of the task, re-armed in OnEnter().
 ```
+
+이 settle 대기 짝은 흔해서 **`StayUntil`** 이 한 호출로 접어준다: 대기 조건 + settle 시간 + 두 타깃. `condition` 을 매 라운드 폴링해 `settle` 동안 유지되면 success 타깃으로, 그 전에 `timeout` 이 지나면 타임아웃 타깃으로 간다. 인자 순서는 `condition, settle, success, timeout, timeout_step` (Python / C# 포트와 동일). 위 `Step2_WaitReady` 전체가 한 줄이 된다:
+
+```cpp
+StepResult Step2_WaitReady()
+{
+    return StayUntil([this] { return flow().hw_ready_->IsReady(); }, 50ms,
+                     UF_FN(Step3_Done), 3000ms, UF_FN(Step_Timeout));
+}
+```
+
+여기 settle 구간은 프레임워크가 추적하며(멤버 타이머 불필요), 아래 내장 타이머처럼 step 진입마다 리셋된다.
 
 **step 본문에서 예외가 나면:** 기본 동작은 전체 종료(`std::terminate`)이다. 계속 진행하려면 모듈에 `CatchStepExceptions()` 를 override 해 `true` 를 돌려준다:
 
@@ -802,7 +816,7 @@ m.ctx_run_.StartFlow();    // runs on rt's pump
 
 ## 챕터 10. 가상 시간 - 배속, freeze, e-stop
 
-모든 `UFTimer` 와 모든 `StayUntil` 마감은 시간을 벽시계가 아니라 런타임의 가상 시계에서 읽는다. 기본은 실제 시간을 1:1 추종하지만, 배속하거나 멈출 수 있으며, 그 런타임의 모든 논리 타이머가 같이 움직인다.
+모든 `UFTimer` 와 모든 `StayTimeout` / `StayUntil` 마감은 시간을 벽시계가 아니라 런타임의 가상 시계에서 읽는다. 기본은 실제 시간을 1:1 추종하지만, 배속하거나 멈출 수 있으며, 그 런타임의 모든 논리 타이머가 같이 움직인다.
 
 ```cpp
 rt.clock().SetScale(10.0);   // logical time runs 10x faster
@@ -813,10 +827,10 @@ rt.clock().Resume();         // ... and continues from where it froze
 
 이것이 제공하는 두 가지:
 
-- **시뮬레이션 재생.** `Passed(5000ms)` 대기와 `StayUntil(3000ms, ...)` 타임아웃을 가진 흐름이 설정한 속도로 돈다. 하루짜리 라인 사이클을 테스트로 몇 초에 돌리거나, 느리게 늘려 관찰한다. [simulator](examples/simulator/) 예제가 이 경우이다: 다섯 러너와 렌더러가 한 시계를 공유하고, 한 번의 `SetScale` / `Freeze` 가 전체를 한꺼번에 스케일·정지한다.
+- **시뮬레이션 재생.** `Passed(5000ms)` 대기와 `StayTimeout(3000ms, ...)` 타임아웃을 가진 흐름이 설정한 속도로 돈다. 하루짜리 라인 사이클을 테스트로 몇 초에 돌리거나, 느리게 늘려 관찰한다. [simulator](examples/simulator/) 예제가 이 경우이다: 다섯 러너와 렌더러가 한 시계를 공유하고, 한 번의 `SetScale` / `Freeze` 가 전체를 한꺼번에 스케일·정지한다.
 - **올바른 일시정지.** e-stop/hold 중에, 라인이 10초 멈춰 있었다는 이유로 3초 "hw ready" 타임아웃이 터지면 안 된다. `Freeze()` 는 모든 논리 마감을 멈추고, `Resume()` 은 멈춘 지점부터 이어가며, 타임아웃이 벽시계가 아니라 가동 시간 기준이 된다.
 
-**무엇이 스케일되고 무엇은 아닌가.** 가상 시계는 논리 대기에만 적용된다 - `UFTimer`(`Elapsed`/`Passed`/`HeldFor`)와 `StayUntil`. `SubmitAsync` 데드라인이나 펌프 자체 낮잠은 일부러 건드리지 않는다: 실제 네트워크 호출이 시뮬 배속 때문에 빨라지지 않기 때문이다. 그것은 실제 벽시계를 유지한다.
+**무엇이 스케일되고 무엇은 아닌가.** 가상 시계는 논리 대기에만 적용된다 - `UFTimer`(`Elapsed`/`Passed`/`HeldFor`)와 `StayTimeout` / `StayUntil`. `SubmitAsync` 데드라인이나 펌프 자체 낮잠은 일부러 건드리지 않는다: 실제 네트워크 호출이 시뮬 배속 때문에 빨라지지 않기 때문이다. 그것은 실제 벽시계를 유지한다.
 
 **바인딩.** `uniflow::UFTimer{rt.clock()}` 로 만든 타이머는 그 런타임 시계를 따른다. 맨 `uniflow::UFTimer{}` 는 실제 시간을 쓰며, 배속/freeze 와 무관한 벽시계 측정이 필요할 때 사용한다. 가상 시간을 직접 읽으려면 `rt.clock().Now()` 를 쓴다.
 
@@ -1019,7 +1033,7 @@ StepResult Flow_Stage::Task_Prepare::Step2_WaitReady()
         flow().state_ = StageState::Prepared;
         return Done();                                        // orchestrator runs Process next
     }
-    return StayUntil(3000ms, UF_FN(Step_Timeout));            // never settled -> recover
+    return StayTimeout(3000ms, UF_FN(Step_Timeout));            // never settled -> recover
 }
 ```
 
@@ -1029,7 +1043,7 @@ struct를 모든 step에 손으로 꿰는 것과 비교해 보라. 단위가 자
 
 3-step 폴러에 단위 셋은 필요 없다. `Entry()` 하나짜리 단일 태스크 - 1-12장이 쓴 그것 - 이다. 모델이 균일하다: step 한 개짜리 flow와 30-step 3-태스크 flow를 똑같이 쓴다. 그래서 flow가 자랄 때 구조가 거기 있고, 자라지 않을 때 추가 비용이 적다.
 
-> 이 장의 모든 것을 실제로 돌리는 완성본은 [pick_and_place](examples/pick_and_place/)이다: 두 피커가 `Pick -> Place` 태스크 쌍, Stage가 `Prepare -> Process -> Cleanup`, 단위별 타이머·비동기 명령·`StayUntil` 하드웨어 타임아웃까지. 멀티 태스크 flow의 레퍼런스 읽을거리이다.
+> 이 장의 모든 것을 실제로 돌리는 완성본은 [pick_and_place](examples/pick_and_place/)이다: 두 피커가 `Pick -> Place` 태스크 쌍, Stage가 `Prepare -> Process -> Cleanup`, 단위별 타이머·비동기 명령·`StayTimeout` 하드웨어 타임아웃까지. 멀티 태스크 flow의 레퍼런스 읽을거리이다.
 
 ---
 

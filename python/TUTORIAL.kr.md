@@ -14,7 +14,7 @@ import uniflow
 
 > **예제.** 여기서 언급하는 여섯 개의 예제는 [python/examples](examples/) 에 있다 - `simulator.py`, `shared_ostream.py`, `message_dispatch.py`, `pick_and_place.py`, `queue_drain.py`, `city_traffic.py`. [../cpp/examples](../cpp/examples/) 의 C++ 세트, [../cs/examples](../cs/examples/) 의 C# 세트와 짝을 이루므로 같은 프로그램이 세 언어에서 똑같이 읽힌다.
 
-> **단위.** Python 포트의 시간 단위는 **초** 다(C++ 포트는 밀리초). `rt.clock.Now()`, `UFTimer`, `StayUntil` 마감이 모두 초 단위다.
+> **단위.** Python 포트의 시간 단위는 **초** 다(C++ 포트는 밀리초). `rt.clock.Now()`, `UFTimer`, `StayTimeout` / `StayUntil` 마감이 모두 초 단위다.
 
 ---
 
@@ -99,9 +99,9 @@ rt.WaitUntilIdle(); rt.stop()
 
 ## 챕터 3. 폴링 (Stay) 과 타이머
 
-`self.Stay()` 를 반환하면 다음 라운드에 같은 step 을 다시 실행한다 - 플래그 폴링이나 다른 모듈 대기용. 펌프는 모두-Stay 라운드 사이에 `stay_sleep`(기본 20ms) 쉰다.
+`self.Stay()` 를 반환하면 다음 라운드에 같은 step 을 다시 실행한다 - 플래그 폴링이나 다른 모듈 대기용. 펌프는 모두-Stay 라운드 사이에 `stay_sleep_sec`(기본 20ms) 쉰다.
 
-step 안에서는 `sleep` 을 할 수 없으므로 *시간* 은 폴링하는 타이머로 표현한다. 모든 모듈은 (런타임 시계에 바인딩되어) **매 `Next` 전이마다 재무장되는** 내장 `self.uf_timer` 를 가지며, 대기 step 에선 `self.flow()` 로 모듈에서 읽는다. 한 task 안에서만 쓰는 타이머는 직접 소유하고 `OnEnter()` 에서 무장하는 편이 깔끔하다:
+step 안에서는 `sleep` 을 할 수 없으므로 *시간* 은 폴링하는 타이머로 표현한다. 모든 모듈은 (런타임 시계에 바인딩되어) **매 step 전환마다 재무장되는** 내장 `self.uf_timer` 를 가진다 - `Next`, `StayTimeout` / `StayUntil` 타임아웃, task 전환, flow 시작에서 재무장하되 `Stay` 에서는 하지 않으므로 한 step 안에서 폴링하는 동안에는 계속 누적된다. 대기 step 에선 `self.flow()` 로 모듈에서 읽는다. 직접 선언한 멤버 타이머도 같은 방식으로 auto-reset 하려면 `self.NewAutoTimer()` 로 만들고, 셀프로 리셋할 타이머는 평범한 `UFTimer` 를 소유해 `OnEnter()` 에서 무장한다:
 
 ```python
 import uniflow
@@ -137,6 +137,17 @@ class Flow_WaitReady(uniflow.Uniflow):
 - `timer.Passed(d)` - 타이머 무장 후 `d` 초가 지났나?
 - `timer.HeldFor(cond, d)` - `cond` 가 `d` 동안 연속으로 참이었나? (한 번이라도 false면 리셋)
 - `timer.Elapsed()` - 원시 경과 초. 페이싱/진행률에.
+
+위의 settle 대기 패턴(조건 폴링, `d` 동안 유지, 아니면 포기)은 흔해서 `StayUntil` 이 한 호출로 접어준다: 대기 조건 + settle 윈도우 + 타임아웃 catch. 조건을 매 라운드 폴링해 `settle_sec` 동안 유지되면 `success` 로 가고, 그 전에 `timeout_sec` 가 지나면 타임아웃 타깃으로 간다. 인자 순서는 `condition, settle_sec, success, timeout_sec, timeout_step`:
+
+```python
+def Step1_Wait(self):
+    # hardware_ready 대기, 0.05s 유지로 정착; 5s 후 포기
+    return self.StayUntil(hardware_ready, 0.05, self.Step2_Go,
+                          5.0, self.Step_Timeout)
+```
+
+(성공 경로를 본문이 직접 정하는 평범한 타임아웃 탈출은 `StayTimeout(timeout_sec, timeout_step)` 을 쓴다 - 챕터 6 참고.)
 
 `OnEnter()` 는 task 가 진입될 때마다 첫 step 직전 1회 실행된다 - per-task 상태 재무장 자리. `Entry()` 는 override 해서 첫 step 을 지정한다.
 
@@ -232,7 +243,7 @@ class Flow_Worker(uniflow.Uniflow):
             return self.Done()
 ```
 
-잡이 도는 동안 펌프는 다른 모듈을 계속 돌린다. 잡이 끝나면 펌프를 깨우므로, 다음 `Step2_Wait` 폴링이 `stay_sleep` 만큼 기다리지 않고 결과를 바로 캐치한다.
+잡이 도는 동안 펌프는 다른 모듈을 계속 돌린다. 잡이 끝나면 펌프를 깨우므로, 다음 `Step2_Wait` 폴링이 `stay_sleep_sec` 만큼 기다리지 않고 결과를 바로 캐치한다.
 
 `AsyncResult(id)` 는 `.state` 와 다음 술어를 가진 `AsyncOutcome` 을 반환한다: `.ok()`(Done - `.return_value` 유효), `.pending()`(진행 중), `.failed()`(워커가 예외), `.is_timeout()`(마감 초과), `.found()`(id 가 살아있는 슬롯에 매칭). 잘못된/지워진 id(`0` 포함)는 `NotFound` 로 읽힌다. 모듈은 `self.AnyAsyncPending()` 과 `self.ClearAsync()`(모든 진행 중 워커 폐기)도 제공한다.
 
@@ -242,11 +253,11 @@ class Flow_Worker(uniflow.Uniflow):
 
 ---
 
-## 챕터 6. 스텝 타임아웃 - `StayUntil`
+## 챕터 6. 스텝 타임아웃 - `StayTimeout`
 
 `SubmitAsync` 는 *잡* 이 늦어진 경우를 처리한다. 한편 잡을 기다리는 게 아닌 경우도 있다 - 하드웨어에 명령을 내려놓고 "완료" 플래그나 센서를 `Stay()` 로 폴링하는 경우로, 신호가 끝내 오지 않을 수 있다. 축이 끼이거나 밸브가 멈추면 맨 `Stay()` 루프는 무한히 폴링하고, 라인은 에러도 없이 멈춰 선다. 실제 장비에선 심각한 고장 양상이다.
 
-`self.StayUntil(timeout_sec, on_timeout)` 은 **마감이 달린 `Stay()`** 다: 이 step 을 계속 폴링하되, step 에 *진입한 시점* 부터 **논리 시간** 으로 `timeout_sec` 이 지나면 `on_timeout` 으로 빠진다. 그 step 이 `catch` 역할을 한다 - 정해진 복구 경로로의 보장된 탈출구다.
+`self.StayTimeout(timeout_sec, on_timeout)` 은 **마감이 달린 `Stay()`** 다: 이 step 을 계속 폴링하되, step 에 *진입한 시점* 부터 **논리 시간** 으로 `timeout_sec` 이 지나면 `on_timeout` 으로 빠진다. 그 step 이 `catch` 역할을 한다 - 정해진 복구 경로로의 보장된 탈출구다. 성공 경로는 여전히 본문이 소유한다(본문이 직접 `Next`/`Done` 반환). 대기 조건과 settle 윈도우까지 한 호출로 접으려면 챕터 3의 `StayUntil` 을 쓴다.
 
 전체 패턴 - 명령, 마감 걸린 대기, 복구:
 
@@ -275,7 +286,7 @@ class Flow_Move(uniflow.Uniflow):
             if self.flow().axis.in_position():    # 정상 경로
                 return self.Next(self.Step3_Clamp)
             # 아직 이동 중 - 폴링하되 2s 넘게 멈춰있으면 포기
-            return self.StayUntil(2.0, self.Step_Stalled)
+            return self.StayTimeout(2.0, self.Step_Stalled)
 
         # 대기 step 진입 후 2s 안에 in_position 이 끝내 true 가 안 된 경우에만 도달.
         # 흐름은 멈춰 설 수 없다 - 항상 정의된 어딘가로 도착한다.
@@ -288,7 +299,7 @@ class Flow_Move(uniflow.Uniflow):
             return self.Done()
 ```
 
-`StayUntil` 없이 `Step2_WaitInPos` 가 맨 `Stay()` 를 반환했다면, 누군가 라인이 죽은 걸 알아챌 때까지 무한히 돈다. 이걸 쓰면 이동이 안 끝날 경우 `Step_Stalled` 에 반드시 도달한다.
+`StayTimeout` 없이 `Step2_WaitInPos` 가 맨 `Stay()` 를 반환했다면, 누군가 라인이 죽은 걸 알아챌 때까지 무한히 돈다. 이걸 쓰면 이동이 안 끝날 경우 `Step_Stalled` 에 반드시 도달한다.
 
 복구 step 도 하나의 step 이므로 어디로든 라우팅할 수 있다. 흔한 형태가 *재시도 후 포기* 다:
 
@@ -296,7 +307,7 @@ class Flow_Move(uniflow.Uniflow):
         def Step2_WaitInPos(self):
             if self.flow().axis.in_position():
                 return self.Next(self.Step3_Clamp)
-            return self.StayUntil(2.0, self.Step_Retry)
+            return self.StayTimeout(2.0, self.Step_Retry)
 
         def Step_Retry(self):
             f = self.flow()
@@ -311,7 +322,7 @@ class Flow_Move(uniflow.Uniflow):
 
 `Step1_Command` -> `Step2_WaitInPos` 재진입은 새 step 진입이므로, 시도마다 2s 마감이 새로 시작된다 - 수동 타이머 관리가 필요 없다. 마감은 step 진입 기준이라 반복되는 Stay 틱이 시계를 뒤로 밀지 않는다.
 
-> **가상 시계.** 타이머와 `StayUntil` 마감은 `rt.clock` 위에서 돈다 - 배속/정지 가능한 시계다. `rt.clock.SetScale(10)` 은 전체 흐름을 10배속 재생하고, `rt.clock.Freeze()` / `.Resume()` 은 모든 논리 타임아웃을 정지한다(예: e-stop 중 2s 타임아웃이 멈춤 동안 안 터지게). async/IO 데드라인은 실제 시간을 유지한다. `simulator.py` 예제가 이 전부를 키보드로 실시간 구동한다.
+> **가상 시계.** 타이머와 `StayTimeout` / `StayUntil` 마감은 `rt.clock` 위에서 돈다 - 배속/정지 가능한 시계다. `rt.clock.SetScale(10)` 은 전체 흐름을 10배속 재생하고, `rt.clock.Freeze()` / `.Resume()` 은 모든 논리 타임아웃을 정지한다(예: e-stop 중 2s 타임아웃이 멈춤 동안 안 터지게). async/IO 데드라인은 실제 시간을 유지한다. `simulator.py` 예제가 이 전부를 키보드로 실시간 구동한다.
 
 ---
 

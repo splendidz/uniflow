@@ -35,9 +35,9 @@ namespace Uniflow.Examples.MessageDispatch
             // 'new Observer()' prints nothing.
             var cfg = new Config
             {
-                IdleSleep = 0.001,
-                StaySleep = 0.02,
-                StepIntervalSleep = 0.0,
+                IdleSleepSec = 0.001,
+                StaySleepSec = 0.02,
+                StepIntervalSleepSec = 0.0,
             };
             Rt = new Runtime(new Runtime.Options { Threads = 4, Observer = new Observer(), Config = cfg });
 

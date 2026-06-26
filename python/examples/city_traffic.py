@@ -994,9 +994,9 @@ class App:
         # Silent runtime: the ANSI renderer OWNS stdout, so the default
         # ConsoleObserver's per-step trace must be suppressed. Short all-Stay
         # naps keep motion and the renderer smooth (sleeps in SECONDS).
-        cfg = uniflow.Config(idle_sleep=0.001,
-                             stay_sleep=0.005,
-                             step_interval_sleep=0.0)
+        cfg = uniflow.Config(idle_sleep_sec=0.001,
+                             stay_sleep_sec=0.005,
+                             step_interval_sleep_sec=0.0)
         self.rt = uniflow.Runtime(observer=uniflow.Observer(), config=cfg)
 
         # Phase 1: construct. visualisation, then one light per junction, then

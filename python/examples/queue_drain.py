@@ -524,9 +524,9 @@ class App:
         # default ConsoleObserver's trace output must be suppressed. An empty
         # Observer prints nothing. Sleep knobs (seconds): burst on any-Next round,
         # short stay nap, tiny idle nap.
-        cfg = uniflow.Config(idle_sleep=0.001,
-                             stay_sleep=0.02,
-                             step_interval_sleep=0.0)
+        cfg = uniflow.Config(idle_sleep_sec=0.001,
+                             stay_sleep_sec=0.02,
+                             step_interval_sleep_sec=0.0)
         self.rt = uniflow.Runtime(observer=uniflow.Observer(), config=cfg)
 
         # Phase 1: construct every module.

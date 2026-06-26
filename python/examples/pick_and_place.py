@@ -17,7 +17,7 @@ FEATURE FOCUS:
     zone B. Solved purely by reading peer members (InsideZoneB / Carrying); no
     locks, because every module advances on the same pump thread round-robin.
   - async-poll command acks: the Stage's start/cleanup commands are SubmitAsync
-    workers, polled by AsyncId with a StayUntil timeout catch - the pump never
+    workers, polled by AsyncId with a StayTimeout timeout catch - the pump never
     blocks on them.
   - multi-task module: one Uniflow module (the Stage) holds three tasks and the
     orchestrator runs them one at a time.
@@ -797,7 +797,7 @@ class Flow_Stage(uniflow.Uniflow):
             r = self.AsyncResult(cmd)
             if r.pending():
                 self.Describe("wait start ack")
-                return self.StayUntil(2.0, self.Step_StartAckTimeout)
+                return self.StayTimeout(2.0, self.Step_StartAckTimeout)
             if not r.ok() or not r.return_value:
                 self.Describe("start cmd failed")
                 return self.Fail()
@@ -822,7 +822,7 @@ class Flow_Stage(uniflow.Uniflow):
                 self.Describe("prepared")
                 return self.Done()
             self.Describe("wait hw ready")
-            return self.StayUntil(3.0, self.Step4_HwTimeout)
+            return self.StayTimeout(3.0, self.Step4_HwTimeout)
 
         def Step4_HwTimeout(self):
             self.Describe("hw ready timeout")
@@ -892,7 +892,7 @@ class Flow_Stage(uniflow.Uniflow):
             r = self.AsyncResult(cmd)
             if r.pending():
                 self.Describe("wait cleanup ack")
-                return self.StayUntil(2.0, self.Step_CleanupAckTimeout)
+                return self.StayTimeout(2.0, self.Step_CleanupAckTimeout)
             if not r.ok() or not r.return_value:
                 self.Describe("cleanup failed")
                 return self.Fail()

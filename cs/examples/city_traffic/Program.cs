@@ -248,9 +248,9 @@ namespace Uniflow.CityTraffic
             // naps keep motion and the renderer smooth (sleeps in SECONDS).
             var cfg = new Config
             {
-                IdleSleep = 0.001,
-                StaySleep = 0.005,
-                StepIntervalSleep = 0.0,
+                IdleSleepSec = 0.001,
+                StaySleepSec = 0.005,
+                StepIntervalSleepSec = 0.0,
             };
             Rt = new Runtime(new Runtime.Options { Observer = new Observer(), Config = cfg });
 

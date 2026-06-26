@@ -366,7 +366,7 @@ class Flow_Student(uniflow.Uniflow):
                     return self.Done()
                 # Quiet gap; spawners may still post later. Park-and-wait by
                 # Stay()ing rather than Done()ing - the pump just polls us at
-                # stay_sleep.
+                # stay_sleep_sec.
                 self.Describe("mailbox empty, spawners not done -> waiting")
                 return self.Stay()
             f.current = m
@@ -682,9 +682,9 @@ class App:
         # Silent observer: the ANSI renderer OWNS stdout, so the default
         # ConsoleObserver's step-trace output must be suppressed. An empty
         # Observer prints nothing.
-        cfg = uniflow.Config(idle_sleep=0.001,
-                             stay_sleep=0.02,
-                             step_interval_sleep=0.0)
+        cfg = uniflow.Config(idle_sleep_sec=0.001,
+                             stay_sleep_sec=0.02,
+                             step_interval_sleep_sec=0.0)
         self.rt = uniflow.Runtime(threads=4,
                                   observer=uniflow.Observer(),
                                   config=cfg)

@@ -666,7 +666,7 @@ StepResult Step3_WaitRequest()
 StepResult Step4_WaitAck()
 {
     if (flow().device_.HasAck()) { flow().OnSuccess(); return Done(); }
-    return StayUntil(3000ms, UF_FN(Step5_Timeout));     // no ack within 3s -> go to the timeout step
+    return StayTimeout(3000ms, UF_FN(Step5_Timeout));     // no ack within 3s -> go to the timeout step
 }
 
 StepResult Step5_Timeout()
@@ -677,7 +677,7 @@ StepResult Step5_Timeout()
 }
 ```
 
-What exploded in the flag version above - `connected_`/`connecting_`/`cmd_sent_`/`waiting_ack_`/`draining_`/`fault_`/`estop_` implicitly responsible for resetting one another, with e-stop and fault able to cut in at any branch, so "forgetting a reset becomes a bug" - is gone. Brace depth is fixed, and each state becomes one named step. Even cross-cutting paths like e-stop/fault are expressed not as flags but as explicit transitions (`StayUntil`/`Next`/`Fail`), so adding a stage means adding one function and changing only its wiring, leaving the rest of the stages untouched.
+What exploded in the flag version above - `connected_`/`connecting_`/`cmd_sent_`/`waiting_ack_`/`draining_`/`fault_`/`estop_` implicitly responsible for resetting one another, with e-stop and fault able to cut in at any branch, so "forgetting a reset becomes a bug" - is gone. Brace depth is fixed, and each state becomes one named step. Even cross-cutting paths like e-stop/fault are expressed not as flags but as explicit transitions (`StayTimeout`/`Next`/`Fail`), so adding a stage means adding one function and changing only its wiring, leaving the rest of the stages untouched.
 
 This structure also helps in team work. Because every developer expresses logic in the same pattern, the stage structure is grasped immediately in code review. Because the framework enforces the pattern, consistent code results regardless of experience level.
 
@@ -896,9 +896,9 @@ Each task calls `OnEnter()` on entry, so per-unit initialization (timer reset, c
 
 ### 6. Time Control - simulator scale/freeze (Scale & Freeze)
 
-Implementing a simulator with uniflow gives you **the speed-up and pause of the entire simulation with no extra implementation.** All time-based logic - step timeouts (`StayUntil`), elapsed/settle timers (`UFTimer`, `HeldFor`) - follows the single logical clock the `Runtime` holds. Scaling or freezing that one clock makes every flow above speed up or stop together.
+Implementing a simulator with uniflow gives you **the speed-up and pause of the entire simulation with no extra implementation.** All time-based logic - step timeouts (`StayTimeout`), elapsed/settle timers (`UFTimer`, `HeldFor`) - follows the single logical clock the `Runtime` holds. Scaling or freezing that one clock makes every flow above speed up or stop together.
 
-<!-- diagram: one logical clock drives every flow's StayUntil/UFTimer (SetScale/Freeze propagates to all) -->
+<!-- diagram: one logical clock drives every flow's StayTimeout/UFTimer (SetScale/Freeze propagates to all) -->
 
 ```cpp
 uniflow::Runtime rt;
@@ -950,7 +950,7 @@ StepResult Step2_ProcessData(AsyncId job)
     auto r = AsyncResult<std::string>(job);
     if (r.pending())                            // still in progress -> poll
     {
-        return StayUntil(5000ms, UF_FN(Step_FetchGaveUp));
+        return StayTimeout(5000ms, UF_FN(Step_FetchGaveUp));
     }
     if (r.is_timeout() || r.failed() || !r.ok())
     {
@@ -988,7 +988,7 @@ def Step1_FetchData(self):
 def Step2_ProcessData(self, job):
     r = self.AsyncResult(job)
     if r.pending():                                 # still in progress -> poll
-        return self.StayUntil(5.0, self.Step_FetchGaveUp)
+        return self.StayTimeout(5.0, self.Step_FetchGaveUp)
     if r.is_timeout() or r.failed() or not r.ok():
         self.flow().log.Error("fetch failed")
         return self.Fail()
@@ -1031,7 +1031,7 @@ StepResult Step2_ProcessData()
     var r = AsyncResult<string>(_job);
     if (r.Pending)                                  // still in progress -> poll
     {
-        return StayUntil(5.0, Step_FetchGaveUp);
+        return StayTimeout(5.0, Step_FetchGaveUp);
     }
     if (r.IsTimeout || r.Failed || !r.Ok)
     {
@@ -1058,7 +1058,7 @@ After `SubmitAsync`, the pump does not block that module. The step that threw th
 
 The `AsyncOutcome<T>` that `AsyncResult<T>(id)` returns has five states: `NotFound` (invalid/cleaned-up/0 id), `Pending`, `Done` (result in `return_value`), `Failed`, `TimedOut`. An invalid id naturally falls to `NotFound`, flowing into the error branch with no null dereference.
 
-You can **throw multiple jobs at once** and wait for them all in one step. `AnyAsyncPending()` is the join-all primitive (set the deadline yourself with `StayUntil`).
+You can **throw multiple jobs at once** and wait for them all in one step. `AnyAsyncPending()` is the join-all primitive (set the deadline yourself with `StayTimeout`).
 
 ```cpp
 StepResult Step1_KickProbes()
@@ -1076,7 +1076,7 @@ StepResult Step2_Join(AsyncId a, AsyncId b)
 {
     if (AnyAsyncPending())                      // poll until both finish
     {
-        return StayUntil(2000ms, UF_FN(Step_ProbeTimeout));
+        return StayTimeout(2000ms, UF_FN(Step_ProbeTimeout));
     }
     use(*AsyncResult<int>(a).return_value, *AsyncResult<bool>(b).return_value);
     return Done();
@@ -1085,13 +1085,13 @@ StepResult Step2_Join(AsyncId a, AsyncId b)
 
 A timeout does not forcibly kill the worker (in C++ there is no safe way to kill a thread). `TimedOut` means "stop waiting," and the worker keeps running in the background until it finishes naturally. If cleanup is needed, discard the slot with `ClearAsync()` - the unfinished worker is abandoned (its result discarded) and `OnAsyncAbandoned` fires per worker so the leak is visible in the log. To prevent throwing work without bound, when a flow's concurrent in-flight count exceeds `Config::max_inflight_async`, `SubmitAsync` returns `0` and warns via `OnAsyncHighWater`.
 
-When the polled condition itself needs a timeout, use `StayUntil` the same way.
+When the polled condition itself needs a timeout, use `StayTimeout` the same way.
 
 ```cpp
 StepResult Step1_WaitSensor()
 {
     if (flow().sensor_.IsReady()) return Next(UF_FN(Step2_Process));
-    return StayUntil(3000ms, UF_FN(Step3_SensorTimeout));  // when 3s is exceeded, go to the timeout step
+    return StayTimeout(3000ms, UF_FN(Step3_SensorTimeout));  // when 3s is exceeded, go to the timeout step
 }
 ```
 
@@ -1137,7 +1137,7 @@ line - a Load picker carries a part A->B, a Stage machines it at B, an Unload pi
 An orchestrator keeps the two pickers from ever sharing zone B, and that mutual exclusion is a plain
 member read (not a lock) because everything is on one pump. The Stage holds three tasks
 (Prepare/Process/Cleanup) and gets command acks via `SubmitAsync` + `AsyncResult` polling with a
-`StayUntil` timeout.
+`StayTimeout` timeout.
 
 Languages: [C++](cpp/examples/pick_and_place/README.md) (dual render) | [Python](python/examples/pick_and_place.py) | [C#](cs/examples/pick_and_place/)
 

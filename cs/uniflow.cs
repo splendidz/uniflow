@@ -69,14 +69,29 @@ namespace Uniflow
         public string Reason { get; }
         public double TimeoutSec { get; }
 
+        // StayUntil with a wait condition: Cond is polled each round and, once it
+        // has stayed true continuously for SettleSec (post-wait / settling), the
+        // step transitions to SuccessFn. NextFn stays the timeout target. Cond
+        // null means the classic timeout-only Stay.
+        public Func<bool>? Cond { get; }
+        public double SettleSec { get; }
+        public Func<StepResult>? SuccessFn { get; }
+        public string SuccessName { get; }
+
         internal StepResult(StepAction action, Func<StepResult>? nextFn = null,
-                            string nextName = "", string reason = "", double timeoutSec = 0.0)
+                            string nextName = "", string reason = "", double timeoutSec = 0.0,
+                            Func<bool>? cond = null, double settleSec = 0.0,
+                            Func<StepResult>? successFn = null, string successName = "")
         {
             Action = action;
             NextFn = nextFn;
             NextName = nextName;
             Reason = reason;
             TimeoutSec = timeoutSec;
+            Cond = cond;
+            SettleSec = settleSec;
+            SuccessFn = successFn;
+            SuccessName = successName;
         }
     }
 
@@ -382,14 +397,14 @@ namespace Uniflow
     }
 
     // ----- Config: per-Runtime tuning -----
-    // Pump-thread sleep knobs (seconds). IdleSleep: no flow running anywhere;
-    // StaySleep: flows running but every active module Stay'd this round;
-    // StepIntervalSleep: at least one module advanced this round (0 = burst).
+    // Pump-thread sleep knobs (seconds). IdleSleepSec: no flow running anywhere;
+    // StaySleepSec: flows running but every active module Stay'd this round;
+    // StepIntervalSleepSec: at least one module advanced this round (0 = burst).
     public sealed class Config
     {
-        public double IdleSleep { get; set; } = 0.001;
-        public double StaySleep { get; set; } = 0.02;
-        public double StepIntervalSleep { get; set; } = 0.0;
+        public double IdleSleepSec { get; set; } = 0.001;
+        public double StaySleepSec { get; set; } = 0.02;
+        public double StepIntervalSleepSec { get; set; } = 0.0;
         public int MaxInflightAsync { get; set; } = 64;
     }
 
@@ -403,7 +418,7 @@ namespace Uniflow
         public int Id;
         public string Label = "";
         public double? TimeoutSec;
-        public double SubmittedAt;          // real seconds
+        public double SubmittedAtSec;          // real seconds
         public System.Threading.Tasks.Task<object?> Task = null!;
         public bool Done;
         public object? Value;
@@ -464,13 +479,36 @@ namespace Uniflow
             return new StepResult(StepAction.Next, nextFn: step, nextName: StepName(step));
         }
 
-        // Poll this step, but if timeoutSec of LOGICAL time elapses since step
-        // entry, transition to 'step' (the step-level "catch"). The deadline is
-        // measured from step entry, not from this call.
-        protected StepResult StayUntil(double timeoutSec, Func<StepResult> step)
+        // Wait for 'condition' with a settle window and a timeout catch, all in
+        // one step intent. Each round 'condition' is polled; once it has stayed
+        // true continuously for 'settleSec' (post-wait / settling) the step
+        // transitions to 'success'. If 'timeoutSec' of LOGICAL time elapses since
+        // step entry first, it transitions to 'timeoutStep' instead. The deadline
+        // is measured from step entry, not from this call. For a plain timeout
+        // escape with no condition (the body decides success), use StayTimeout.
+        //
+        //   return StayUntil(() => SensorOn, 3, Step_Clamp, 100, Step_Error);
+        protected StepResult StayUntil(Func<bool> condition, double settleSec,
+                                       Func<StepResult> success, double timeoutSec,
+                                       Func<StepResult> timeoutStep)
         {
-            return new StepResult(StepAction.Stay, nextFn: step,
-                                  nextName: StepName(step), timeoutSec: timeoutSec);
+            return new StepResult(StepAction.Stay, nextFn: timeoutStep,
+                                  nextName: StepName(timeoutStep), timeoutSec: timeoutSec,
+                                  cond: condition, settleSec: settleSec, successFn: success,
+                                  successName: StepName(success));
+        }
+
+        // Plain step deadline (the original StayUntil): keep polling THIS step,
+        // but if 'timeoutSec' of LOGICAL time elapses since step entry, transition
+        // to 'timeoutStep' - the step-level "catch". The body decides the success
+        // path with its own Next/Done/Fail; this only guarantees an exit if the
+        // wait never resolves.
+        //
+        //   return StayTimeout(2.0, Step_AckTimeout);
+        protected StepResult StayTimeout(double timeoutSec, Func<StepResult> timeoutStep)
+        {
+            return new StepResult(StepAction.Stay, nextFn: timeoutStep,
+                                  nextName: StepName(timeoutStep), timeoutSec: timeoutSec);
         }
 
         // Switch the module to another of its tasks mid-flow (rare). Next never
@@ -532,6 +570,16 @@ namespace Uniflow
         // Per-module built-in timer, bound to the runtime clock (scale / freeze).
         protected UFTimer UfTimer { get; }
 
+        // Timers re-armed on every step change (Next / StayUntil timeout / flow
+        // start / task switch) but NOT on a Stay. The built-in UfTimer is always
+        // registered; user member timers opt in via NewAutoTimer().
+        private readonly List<UFTimer> _autoTimers = new List<UFTimer>();
+
+        // StayUntil-with-condition settle accumulator: the virtual-clock instant
+        // the wait condition last turned true (null = not currently held). Reset
+        // on every step change so settle is measured from within the step.
+        private double? _settleSinceSec;
+
         private readonly List<ITaskBinding> _tasks = new List<ITaskBinding>();
 
         // -- current position within the running flow --
@@ -544,9 +592,9 @@ namespace Uniflow
         private bool _flowStartedPending;
 
         private int _stepOrdinal;
-        private double _flowT0;   // real seconds
-        private double _stepT0;   // real seconds (profiling elapsedMs)
-        private double _stepT0V;  // virtual seconds (StayUntil deadline)
+        private double _flowT0Sec;   // real seconds
+        private double _stepRealT0Sec;   // real seconds (profiling elapsedMs)
+        private double _stepVirtT0Sec;  // virtual seconds (StayUntil deadline)
         private int _stepTicks;
 
         public bool Failed { get; private set; }
@@ -562,7 +610,29 @@ namespace Uniflow
             _rt = rt;
             _name = name ?? GetType().Name;
             UfTimer = new UFTimer(rt.Clock);
+            _autoTimers.Add(UfTimer);
             rt.Attach(this);
+        }
+
+        // Create a UFTimer bound to this runtime's clock and register it for
+        // auto-reset: it re-arms on every step change, like the built-in UfTimer.
+        // For a self-managed timer, construct new UFTimer(Clock) directly instead.
+        protected UFTimer NewAutoTimer()
+        {
+            var t = new UFTimer(_rt.Clock);
+            _autoTimers.Add(t);
+            return t;
+        }
+
+        // Re-arm every auto-reset timer and clear the StayUntil settle
+        // accumulator. Called on each step change (NOT on a Stay).
+        private void ResetStepTimers()
+        {
+            foreach (var t in _autoTimers)
+            {
+                t.Restart();
+            }
+            _settleSinceSec = null;
         }
 
         // The runtime's logical clock, reachable from a step via Flow.Clock.
@@ -616,14 +686,17 @@ namespace Uniflow
                 Failed = false;
                 FailReason = "";
                 FailExc = null;
-                _flowT0 = now;
-                _stepT0 = now;
-                _stepT0V = _rt.Clock.Now();
+                _flowT0Sec = now;
+                _stepRealT0Sec = now;
+                _stepVirtT0Sec = _rt.Clock.Now();
                 _asyncSlots = new List<AsyncSlot>();
                 _nextAsyncId = 1;
                 _unitEntered = null;
                 _flowStartedPending = true;
             }
+            // The first step is a step change too: arm the auto-reset timers so
+            // the entry step sees fresh timers, not time accrued since construction.
+            ResetStepTimers();
             _rt.Wake();
             return StartResult.Ok;
         }
@@ -669,11 +742,14 @@ namespace Uniflow
                 _currentName = "Entry";
                 _desc = "";
                 _stepOrdinal += 1;
-                _stepT0 = RealNow();
-                _stepT0V = _rt.Clock.Now();
+                _stepRealT0Sec = RealNow();
+                _stepVirtT0Sec = _rt.Clock.Now();
                 _stepTicks = 0;
                 _unitEntered = null;
             }
+            // A task switch advances the step (new task's Entry next round): re-arm
+            // the auto-reset timers, same as a Next transition does.
+            ResetStepTimers();
             return StartResult.Ok;
         }
 
@@ -795,7 +871,7 @@ namespace Uniflow
                 Id = _nextAsyncId,
                 Label = label,
                 TimeoutSec = timeoutSec,
-                SubmittedAt = RealNow(),
+                SubmittedAtSec = RealNow(),
             };
             // Run on the pool. Wake the pump the instant the worker finishes so the
             // next poll is not delayed by a full stay nap.
@@ -860,7 +936,7 @@ namespace Uniflow
             {
                 if (!s.Done)
                 {
-                    double pendingMs = (now - s.SubmittedAt) * 1000.0;
+                    double pendingMs = (now - s.SubmittedAtSec) * 1000.0;
                     _rt.ObserverRef.OnAsyncAbandoned(_name, s.Label, pendingMs);
                 }
             }
@@ -877,7 +953,7 @@ namespace Uniflow
                 {
                     continue;
                 }
-                double elapsed = now - s.SubmittedAt;
+                double elapsed = now - s.SubmittedAtSec;
                 bool ready = s.Task.IsCompleted;
                 bool timedOut = s.TimeoutSec.HasValue && elapsed >= s.TimeoutSec.Value;
                 if (!ready && !timedOut)
@@ -964,17 +1040,40 @@ namespace Uniflow
                 return true;
             }
 
-            // A StayUntil whose deadline (logical time, from step entry) has passed
-            // becomes a transition to its timeout target.
-            if (result.Action == StepAction.Stay && result.TimeoutSec > 0.0
-                && (_rt.Clock.Now() - _stepT0V) >= result.TimeoutSec)
-            {
-                Transition(observer, prevName, result.NextFn!, result.NextName);
-                return true;
-            }
-
             if (result.Action == StepAction.Stay)
             {
+                double nowV = _rt.Clock.Now();
+                // A StayUntil wait condition that has stayed true for SettleSec
+                // (post-wait / settling) transitions to its success target.
+                // Checked before the timeout so a satisfied wait wins if both
+                // are ready the same round.
+                if (result.Cond != null)
+                {
+                    if (result.Cond())
+                    {
+                        if (_settleSinceSec == null)
+                        {
+                            _settleSinceSec = nowV;
+                        }
+                        if ((nowV - _settleSinceSec.Value) >= result.SettleSec
+                            && result.SuccessFn != null)
+                        {
+                            Transition(observer, prevName, result.SuccessFn, result.SuccessName);
+                            return true;
+                        }
+                    }
+                    else
+                    {
+                        _settleSinceSec = null;
+                    }
+                }
+                // A StayUntil whose deadline (logical time, from step entry) has
+                // passed becomes a transition to its timeout target.
+                if (result.TimeoutSec > 0.0 && (nowV - _stepVirtT0Sec) >= result.TimeoutSec)
+                {
+                    Transition(observer, prevName, result.NextFn!, result.NextName);
+                    return true;
+                }
                 return false;
             }
 
@@ -992,7 +1091,7 @@ namespace Uniflow
         private void Transition(Observer observer, string prevName,
                                 Func<StepResult> nextFn, string nextName)
         {
-            double elapsedMs = (RealNow() - _stepT0) * 1000.0;
+            double elapsedMs = (RealNow() - _stepRealT0Sec) * 1000.0;
             observer.OnStepChanged(_name, prevName, nextName, _desc,
                                    _stepOrdinal, elapsedMs, _stepTicks);
             lock (_lock)
@@ -1001,17 +1100,17 @@ namespace Uniflow
                 _currentName = nextName;
                 _desc = "";
                 _stepOrdinal += 1;
-                _stepT0 = RealNow();
-                _stepT0V = _rt.Clock.Now();
+                _stepRealT0Sec = RealNow();
+                _stepVirtT0Sec = _rt.Clock.Now();
                 _stepTicks = 0;
             }
-            UfTimer.Restart();
+            ResetStepTimers();
         }
 
         private void EndFlow(StepAction action, Observer observer,
                              string reason = "", Exception? exc = null)
         {
-            double elapsedMs = (RealNow() - _stepT0) * 1000.0;
+            double elapsedMs = (RealNow() - _stepRealT0Sec) * 1000.0;
             string prevName = _currentName;
             observer.OnStepChanged(_name, prevName, "", _desc,
                                    _stepOrdinal, elapsedMs, _stepTicks);
@@ -1029,7 +1128,7 @@ namespace Uniflow
                         FailExc = exc;
                     }
                 }
-                wallMs = (RealNow() - _flowT0) * 1000.0;
+                wallMs = (RealNow() - _flowT0Sec) * 1000.0;
                 finalOrdinal = _stepOrdinal;
                 DropAsyncSlots();
                 _activeTask = null;
@@ -1193,15 +1292,15 @@ namespace Uniflow
                 double nap;
                 if (outcome == 2)
                 {
-                    nap = _config.StepIntervalSleep;
+                    nap = _config.StepIntervalSleepSec;
                 }
                 else if (outcome == 1)
                 {
-                    nap = _config.StaySleep;
+                    nap = _config.StaySleepSec;
                 }
                 else
                 {
-                    nap = _config.IdleSleep;
+                    nap = _config.IdleSleepSec;
                 }
 
                 if (nap > 0)

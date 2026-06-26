@@ -20,7 +20,7 @@ Core concepts (identical to the C++ edition):
 
 `uniflow.py` is **a single file, standard library only** (easy to vendor).
 
-> **Units.** Durations in the Python port are **seconds** (the C++ port uses milliseconds). This applies to `rt.clock.Now()`, `UFTimer`, `StayUntil` deadlines, and async timeouts.
+> **Units.** Durations in the Python port are **seconds** (the C++ port uses milliseconds). This applies to `rt.clock.Now()`, `UFTimer`, `StayTimeout` / `StayUntil` deadlines, and async timeouts.
 
 ---
 
@@ -35,7 +35,7 @@ Core concepts (identical to the C++ edition):
 | ↳ introspection | `IsIdle` (free?), `WaitUntilIdle(timeout=None)` (block until *this* module is idle), `InstanceName()`, `CurrentStepName()` / `CurrentStepOrdinal()` / `CurrentStepDescription()` (live "where is the flow now?"; `""` / `-1` when idle), `Cancel()` (end the running flow as Fail, reason `"cancelled"`), `Describe(*parts)` |
 | `Task` | the **task** base (commonly nested in the module). Subclass it, define step methods, override `Entry()` (name the first step) and optionally `OnEnter()` (re-arm per-task state on entry) |
 | ↳ reach the module | `self.flow()` -> the owning `Uniflow` (wired by `AddTask`), e.g. `self.flow().some_attr` |
-| ↳ step intents | `Stay()`, `StayUntil(timeout_sec, on_timeout, *args, **kwargs)` (keep polling the current step, but route to `on_timeout` once `timeout_sec` of logical time passes since step entry = a step-level catch), `Next(fn, *args, **kwargs)` (advance to a sibling step, passing args), `Done()`, `Fail(reason="")`, `Describe(*parts)` (one-line "what am I doing" for logs; shown on the next transition then cleared) |
+| ↳ step intents | `Stay()`, `StayTimeout(timeout_sec, timeout_step, *args, **kwargs)` (keep polling the current step, but route to `timeout_step` once `timeout_sec` of logical time passes since step entry = a step-level catch; the body owns the success path), `StayUntil(condition, settle_sec, success, timeout_sec, timeout_step)` (the same with a folded wait condition: poll `condition`, once held for `settle_sec` go to `success`, else on timeout go to `timeout_step`), `Next(fn, *args, **kwargs)` (advance to a sibling step, passing args), `Done()`, `Fail(reason="")`, `Describe(*parts)` (one-line "what am I doing" for logs; shown on the next transition then cleared) |
 | ↳ launch | `StartFlow() -> StartResult` (sugar for `module.StartTask(self)`), `StartTask(other_task)` (switch the module to another of its tasks mid-flow; the only in-task way to cross tasks) |
 | ↳ async | `SubmitAsync(fn, label, timeout_sec=None, *args) -> AsyncId` (offload blocking work; `fn` is a module-level / static function with no task access; `timeout_sec` in real seconds, `None` = none; returns `0` if the in-flight cap was hit), `AsyncResult(id) -> AsyncOutcome`, `AnyAsyncPending() -> bool`, `ClearAsync()` (abandon every in-flight worker) |
 
@@ -44,13 +44,13 @@ Core concepts (identical to the C++ edition):
 | Element | Contents |
 |---|---|
 | `StepAction` | `STAY` / `NEXT` / `DONE` / `FAIL` (an intent, not a state change) |
-| `StepResult` | what a step returns. `action`, `next_fn`, `next_name`, `reason`, `timeout_sec` (StayUntil only) |
+| `StepResult` | what a step returns. `action`, `next_fn`, `next_name`, `reason`, `timeout_sec` (StayTimeout/StayUntil), `cond` / `settle_sec` / `success_fn` / `success_name` (StayUntil folded form) |
 | `StartResult` | outcome of `StartFlow` / `StartTask`: `Ok` (launched) / `Busy` (a task is already running on this module) |
 | `AsyncState` | `NotFound` / `Pending` / `Done` / `Failed` / `TimedOut` |
 | `AsyncOutcome` | by-value snapshot from `AsyncResult(id)`. `state`, `return_value` (engaged only when Done); predicates `ok()` / `pending()` / `failed()` / `is_timeout()` / `found()` |
-| `VirtualClock` | logical clock. `Now()` (seconds), `SetScale(s)` / `Scale()` (speed), `Freeze()` / `Resume()` / `Frozen()` (pause). Tracks the real monotonic clock 1:1 by default. Governs `UFTimer` / `StayUntil` only; async/IO deadlines and the pump nap stay on real time |
+| `VirtualClock` | logical clock. `Now()` (seconds), `SetScale(s)` / `Scale()` (speed), `Freeze()` / `Resume()` / `Frozen()` (pause). Tracks the real monotonic clock 1:1 by default. Governs `UFTimer` / `StayTimeout` / `StayUntil` only; async/IO deadlines and the pump nap stay on real time |
 | `UFTimer` | polling timer. `UFTimer(clock=None)` (real wall clock by default; pass `rt.clock` to follow that virtual clock), `Restart()`, `HeldFor(cond, seconds) -> bool` (True once `cond` has been **continuously** true for `seconds`; any false reading resets and returns False; settling / debounce), `Passed(seconds) -> bool` (fixed wait elapsed, no condition), `Elapsed()` |
-| `Config` | per-Runtime sleep knobs (seconds): `idle_sleep`, `stay_sleep`, `step_interval_sleep`, `max_inflight_async` |
+| `Config` | per-Runtime sleep knobs (seconds): `idle_sleep_sec`, `stay_sleep_sec`, `step_interval_sleep_sec`, `max_inflight_async` |
 
 ### Runtime and observers
 
@@ -103,7 +103,7 @@ The Python port mirrors the C++ public API; only the language plumbing differs.
 | `task.StartFlow()` | `task.StartFlow()` | sugar for `module.StartTask(self)` |
 | `UF_NEXT(StepFn, args...)` | `self.Next(self.StepFn, *args)` | macro -> method; args forwarded to the next step |
 | `Stay()` / `Done()` / `Fail(reason)` | `Stay()` / `Done()` / `Fail(reason="")` | same intents |
-| `StayUntil(ms, StepFn)` | `StayUntil(seconds, StepFn)` | ms -> seconds |
+| `StayUntil(ms, StepFn)` | `StayTimeout(seconds, StepFn)` | ms -> seconds; renamed (StayUntil is now the folded condition form) |
 | `SubmitAsync(fn, "label", ms, args...)` | `SubmitAsync(fn, "label", seconds, *args)` | returns an `AsyncId`; `0` = rejected |
 | `AsyncResult(id)` -> outcome | `AsyncResult(id)` -> `AsyncOutcome` | `ok()` / `pending()` / `failed()` / `is_timeout()`; `.return_value` |
 | `UFTimer`, `HeldFor` / `Passed` / `Elapsed` | same names | bind to `rt.clock` for scale / freeze |
@@ -119,9 +119,9 @@ The class name is taken from `type(self).__name__` when `name` is omitted. `name
 
 - **Faithful to the methodology, dropping the C++ machinery.** CRTP (`Uniflow<Derived>`) -> plain inheritance. Macros (`UF_NEXT` / `UF_START_FLOW` / `UF_ASYNC` etc.) -> methods. Class name -> `type(self).__name__`.
 - **Module owns tasks; a module runs one task at a time.** Logic lives in `Task` subclasses (commonly nested), so each unit operation owns its step methods and the state they share. `Next` advances within a task; `StartTask` is the only in-task way to cross to another task of the same module.
-- **Blocking work = executor offload, polled by id.** `SubmitAsync` enqueues the worker on a `ThreadPoolExecutor` and returns an `AsyncId`; the pump sweeps completed ids each round and a later step reads the `AsyncOutcome` with `AsyncResult`. A finished worker `Wake()`s the pump, so the next poll catches it without waiting a full `stay_sleep`. Mind the GIL: I/O-bound work (network / gRPC) releases the GIL while blocking and gets real concurrency, but CPU-bound steps do not parallelize under the GIL - the rule is to offload CPU-heavy work too.
-- **The poll cadence is managed centrally by the Runtime; there is no per-step gate.** The inter-round wait is an interruptible `Condition`, and `StartTask` / async completion / external `Wake()` interrupt it immediately - so a loose poll cadence (`stay_sleep`) never delays a flow launch or an async-completion catch.
-- **`HeldFor` is "satisfied continuously for `seconds`?" (settling), not "satisfied within a deadline?".** The deadline-based "bail out if it never comes" is `StayUntil(timeout, target)`'s job (routing to a cleanup step like a try/catch's catch). The two are orthogonal: `HeldFor` watches a condition settle, `StayUntil` provides the escape hatch when it never does.
+- **Blocking work = executor offload, polled by id.** `SubmitAsync` enqueues the worker on a `ThreadPoolExecutor` and returns an `AsyncId`; the pump sweeps completed ids each round and a later step reads the `AsyncOutcome` with `AsyncResult`. A finished worker `Wake()`s the pump, so the next poll catches it without waiting a full `stay_sleep_sec`. Mind the GIL: I/O-bound work (network / gRPC) releases the GIL while blocking and gets real concurrency, but CPU-bound steps do not parallelize under the GIL - the rule is to offload CPU-heavy work too.
+- **The poll cadence is managed centrally by the Runtime; there is no per-step gate.** The inter-round wait is an interruptible `Condition`, and `StartTask` / async completion / external `Wake()` interrupt it immediately - so a loose poll cadence (`stay_sleep_sec`) never delays a flow launch or an async-completion catch.
+- **`HeldFor` is "satisfied continuously for `seconds`?" (settling), not "satisfied within a deadline?".** The deadline-based "bail out if it never comes" is `StayTimeout(timeout, target)`'s job (routing to a cleanup step like a try/catch's catch). The two are orthogonal: `HeldFor` watches a condition settle, `StayTimeout` provides the escape hatch when it never does.
 - **`SetPreRound(fn)`**: a hook called once at the top of every round. Keeps common per-round preprocessing ("refresh / poll once per round") out of each module.
 - **Deferred for now (extend as needed):** cross-runtime `PostAndWait` / `Link`, `RoundProfile` / slow-round tracing, `FlowStats`. The examples do not use them yet, so the single file stays small.
 
@@ -129,7 +129,7 @@ The class name is taken from `type(self).__name__` when `name` is omitted. `name
 
 ## 5. Status
 
-- **Core re-aligned to the C++ design.** Modules + tasks (`Uniflow` / `Task`), step intents (`Stay` / `StayUntil` / `Next` / `Done` / `Fail`), `StartTask` / `StartFlow` / `AddTask`, id-based async (`SubmitAsync` / `AsyncResult` / `AsyncOutcome` / `AnyAsyncPending` / `ClearAsync`), `VirtualClock` (`SetScale` / `Freeze` / `Resume`), `UFTimer`, `Config`, `Runtime` (pump + executor + `Post` / `Wake` / `SetPreRound` / `WaitUntilIdle` / `CancelAll` / `stop`), `Observer` / `ConsoleObserver`.
+- **Core re-aligned to the C++ design.** Modules + tasks (`Uniflow` / `Task`), step intents (`Stay` / `StayTimeout` / `StayUntil` / `Next` / `Done` / `Fail`), `StartTask` / `StartFlow` / `AddTask`, id-based async (`SubmitAsync` / `AsyncResult` / `AsyncOutcome` / `AnyAsyncPending` / `ClearAsync`), `VirtualClock` (`SetScale` / `Freeze` / `Resume`), `UFTimer`, `Config`, `Runtime` (pump + executor + `Post` / `Wake` / `SetPreRound` / `WaitUntilIdle` / `CancelAll` / `stop`), `Observer` / `ConsoleObserver`.
 - **Six examples ported** and shipped under [examples/](examples/), mirroring the C++ ([../cpp/examples](../cpp/examples/)) and C# ([../cs/examples](../cs/examples/)) sets: `simulator.py` (virtual clock - scale / freeze), `shared_ostream.py` (lock-free shared sink), `message_dispatch.py` (routing + async poll), `pick_and_place.py` (orchestrator + multi-task module + async-poll acks), `queue_drain.py`, `city_traffic.py`.
 - **Verified on Python 3.14**: the tutorial's key samples (a Task `Next` chain + `StartFlow` + `WaitUntilIdle`; a `SubmitAsync` + `AsyncResult` poll returning the worker result; `VirtualClock.SetScale` shrinking a `StayUntil` deadline; `Freeze` / `Resume` holding logical time; `UFTimer.HeldFor` settling) all run clean.
 

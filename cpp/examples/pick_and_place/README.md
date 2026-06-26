@@ -24,7 +24,7 @@ Flow_Stage        :  Prepare  ->  Process  ->  Cleanup
 
 Each task is a `struct ... : uniflow::Task<FlowClass>` that holds the state its steps share AND owns the step member functions; the flow holds one instance (`ctx_pick_`, `ctx_place_`), declared *public* so a peer can launch it. A step is a *member of its task*, so it inherently belongs to that task; `Next` only reaches sibling steps of the same task struct, and crossing to another task is an explicit `StartTask`. Each task names its entry step by overriding `StepResult Entry() override { return Step_First(); }`. A module runs **one task at a time**: anyone launches a task with `module.ctx_x_.StartFlow()` (or `module.StartTask(module.ctx_x_)`), which returns `StartResult` - `Ok` or `Busy` (a task is already running). The orchestrator drives the line by waiting until a module is idle and launching its next task (`Pick` then `Place`; `Prepare` then `Process` then `Cleanup`) - so the *sequence* is explicit and lives in one place, and each task is a self-contained operation that ends with `Done()`. `Task<>` also carries common per-task info for free - `Name()`, `Elapsed()` since entry, and the `Trajectory()` of steps visited (each a `{name, ms held, tick count}`) - and an `OnEnter()` hook to reset the task's own members. Read more in the main [README's Task-Level Syntax section](../../../README.md#task-level-syntax).
 
-This example uses the **direct-call API** rather than per-step macros: steps are plain task member functions that call `Next(...)`, `StayUntil(...)`, `SubmitAsync(...)` directly and reach the parent flow's state through `flow()` (e.g. `flow().x_->Move(...)`). The only macro is one argument helper - `UF_FN(fn)` (inside a step it expands to `&Task::fn, "fn"`, the member-pointer + log-name pair) - so the functions stay visible to the reader and to IntelliSense.
+This example uses the **direct-call API** rather than per-step macros: steps are plain task member functions that call `Next(...)`, `StayTimeout(...)`, `SubmitAsync(...)` directly and reach the parent flow's state through `flow()` (e.g. `flow().x_->Move(...)`). The only macro is one argument helper - `UF_FN(fn)` (inside a step it expands to `&Task::fn, "fn"`, the member-pointer + log-name pair) - so the functions stay visible to the reader and to IntelliSense.
 
 ---
 
@@ -142,7 +142,7 @@ A step reaches the parent flow through `flow()`, so it gets at the borrowed axes
 ## Files worth reading
 
 - [uf_load_picker.h](uf_load_picker.h) / [.cpp](uf_load_picker.cpp) - the `Pick -> Place` unit pair in full; a clear example of Task-Level Syntax
-- [uf_stage.cpp](uf_stage.cpp) - `Prepare -> Process -> Cleanup` with per-unit timers, `SubmitAsync`, and a `StayUntil` hardware-ready timeout
+- [uf_stage.cpp](uf_stage.cpp) - `Prepare -> Process -> Cleanup` with per-unit timers, `SubmitAsync`, and a `StayTimeout` hardware-ready timeout
 - [uf_orchestrator.cpp](uf_orchestrator.cpp) - everything about scheduling (spawn / start decisions), as a single `Schedule` unit
 - [app.h](app.h) - the two-phase init pattern, Runtime Opts (threads / observer / sleep policy)
 - [motor_io_factory.h](motor_io_factory.h) - `MotorAxis` / `DigitalLatch` and the single factory thread that integrates them

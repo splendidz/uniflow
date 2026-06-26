@@ -76,7 +76,7 @@ StepResult Flow_Stage::Task_Prepare::Step2_WaitStartAck(uniflow::AsyncId cmd)
     if (r.pending())
     {
         Describe("wait start ack");
-        return StayUntil(2000ms, UF_FN(Step_StartAckTimeout));
+        return StayTimeout(2000ms, UF_FN(Step_StartAckTimeout));
     }
     if (!r.ok() || !*r.return_value)
     {
@@ -119,7 +119,7 @@ StepResult Flow_Stage::Task_Prepare::Step3_WaitHwReady()
     // route to the timeout step (the step-level "catch") rather than poll
     // forever. The deadline is measured from step entry, not from this call.
     Describe("wait hw ready");
-    return StayUntil(3000ms, UF_FN(Step4_HwTimeout));
+    return StayTimeout(3000ms, UF_FN(Step4_HwTimeout));
 }
 
 StepResult Flow_Stage::Task_Prepare::Step4_HwTimeout()
@@ -207,7 +207,7 @@ StepResult Flow_Stage::Task_Cleanup::Step2_WaitCleanupAck(uniflow::AsyncId cmd)
     if (r.pending())
     {
         Describe("wait cleanup ack");
-        return StayUntil(2000ms, UF_FN(Step_CleanupAckTimeout));
+        return StayTimeout(2000ms, UF_FN(Step_CleanupAckTimeout));
     }
     if (!r.ok() || !*r.return_value)
     {

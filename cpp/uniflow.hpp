@@ -1584,6 +1584,14 @@ struct StepResult
     // StayUntil only: deadline measured from step entry. Zero (the default)
     // means "plain Stay, no step timeout".
     Duration timeout = Duration::zero();
+    // StayUntil with a wait condition (post-wait / settling): cond is polled
+    // each round and, once it has stayed true continuously for 'settle', the
+    // step transitions to success_fn BEFORE the timeout. next_fn stays the
+    // timeout target. An empty cond means the classic timeout-only Stay.
+    std::function<bool()>       cond;
+    Duration                    settle = Duration::zero();
+    std::function<StepResult()> success_fn;
+    const char*                 success_name = nullptr;
 };
 
 // ----- Task-Level Syntax: the per-task bookkeeping base -----
@@ -1669,9 +1677,10 @@ public:
     // The base attaches the module to 'rt' and starts driving it on the
     // next pump round (initially idle - no task until StartTask()).
     explicit Uniflow(Runtime& rt) : Uniflow(rt, nullptr) {}
-    Uniflow(Runtime& rt, const char* name) : runtime_(&rt)
+    Uniflow(Runtime& rt, const char* name) : runtime_(&rt), uf_step_timer_(rt.clock())
     {
         instance_name_ = name ? name : "Uniflow";
+        uf_auto_timers_.push_back(&uf_step_timer_);
         runtime_->attach(this);
     }
 
@@ -1769,11 +1778,24 @@ private:
         trace_.clear();
         flow_started_pending_ = true;
         flow_origin_          = FlowOrigin{};
+        // The first step is a step change too: arm the auto-reset timers so the
+        // entry step sees fresh timers, not time accrued since construction.
+        uf_reset_step_timers_();
         // Nudge the pump so the entry step runs on the next round instead of
         // after the current nap - the whole point of launching a task from an
         // event thread is a prompt first step.
         runtime_->Wake();
         return true;
+    }
+
+    // Re-arm every auto-reset timer and clear the StayUntil settle accumulator.
+    // Called on each step change (Next / StayUntil timeout / task switch / flow
+    // start) but NOT on a Stay.
+    void uf_reset_step_timers_()
+    {
+        for (UFTimer* t : uf_auto_timers_)
+            t->Restart();
+        uf_settle_since_ = TimePoint{};
     }
 
 public:
@@ -1809,9 +1831,31 @@ public:
         return flow_running_ ? step_ordinal_ : -1;
     }
 
+    // The module's built-in per-step timer: re-armed on every step change (but
+    // not on a Stay). Reach it from a step via flow().StepTimer(); use Passed /
+    // Elapsed / HeldFor on it the same way as any UFTimer. (TaskContext::Elapsed
+    // is a separate, per-task stopwatch reset on task entry, not per step.)
+    UFTimer&       StepTimer() { return uf_step_timer_; }
+    const UFTimer& StepTimer() const { return uf_step_timer_; }
+
+    // Create a UFTimer bound to this runtime's clock and register it for
+    // auto-reset: it re-arms on every step change, like the built-in StepTimer.
+    // The module owns it (the reference stays valid for the module's lifetime);
+    // grab it once and store the reference/pointer. For a self-managed timer,
+    // construct a UFTimer{Clock()} you reset yourself instead.
+    UFTimer& NewAutoTimer()
+    {
+        uf_owned_timers_.emplace_back(runtime_->clock());
+        uf_auto_timers_.push_back(&uf_owned_timers_.back());
+        return uf_owned_timers_.back();
+    }
+
+    // The runtime's logical clock (scale / freeze), for building your own timers.
+    const VirtualClock& Clock() const { return runtime_->clock(); }
+
 protected:
     // -- Step intents at module scope. Steps live on tasks (uniflow::Task<Flow>)
-    //    and get the full set - Stay / Next / Done / Fail / StayUntil - from
+    //    and get the full set - Stay / Next / Done / Fail / StayUntil / StayTimeout - from
     //    there; these three are kept here so a module helper can also end a flow
     //    if it ever needs to. --
     // Stay() - re-run this step on the next pump round (Config::stay_sleep_ms
@@ -2005,6 +2049,19 @@ private:
 
     std::function<StepResult()> curr_fn_;
 
+    // -- Built-in per-step timer + the auto-reset registry --
+    // uf_step_timer_ is the module's built-in timer, re-armed on every step
+    // change (Next / StayUntil timeout / task switch / flow start) but NOT on a
+    // Stay; reach it from a step via flow().StepTimer(). uf_owned_timers_ holds
+    // the timers handed out by NewAutoTimer() (a deque so their addresses stay
+    // stable); uf_auto_timers_ is the reset list (the built-in plus every owned
+    // one). uf_settle_since_ is the StayUntil-with-condition settle accumulator
+    // (epoch == condition not currently held), reset on each step change.
+    UFTimer                  uf_step_timer_;
+    std::deque<UFTimer>      uf_owned_timers_;
+    std::vector<UFTimer*>    uf_auto_timers_;
+    TimePoint                uf_settle_since_ = {};
+
     // The unit context currently active, for unit-entry detection (a threaded
     // context whose address differs means we crossed a boundary) and for
     // recording each step's visit into its Trajectory() on transition.
@@ -2032,7 +2089,7 @@ private:
 //                               task is a nested type of the flow, flow() reaches
 //                               the flow's private members too (flow().x_).
 //   - Next(UF_FN(Step))       - advance to a sibling step of THIS task.
-//   - Stay() / StayUntil(...) - poll this step (optionally with a deadline).
+//   - Stay() / StayTimeout(...) / StayUntil(...) - poll this step (with a deadline).
 //   - Done() / Fail()         - end the flow (the task is the whole flow here).
 //   - StartTask(other)        - switch the flow to ANOTHER task (Next never
 //                               leaves the current task).
@@ -2106,15 +2163,17 @@ protected:
                 name};
     }
 
-    // A Stay carrying a step deadline: keep polling THIS step, but if 'timeout'
-    // elapses since the step was ENTERED (repeated Stay ticks do not reset it),
-    // transition to step 'fn' instead - the step-level "catch". Like Next, the
-    // timeout target may take bound arguments:
+    // A Stay carrying a step deadline (the plain timeout escape): keep polling
+    // THIS step, but if 'timeout' elapses since the step was ENTERED (repeated
+    // Stay ticks do not reset it), transition to step 'fn' instead - the
+    // step-level "catch". The body decides the success path with its own
+    // Next/Done/Fail; this only guarantees an exit if the wait never resolves.
+    // Like Next, the timeout target may take bound arguments:
     //
-    //   return StayUntil(3000ms, UF_FN(Step_HwTimeout));
+    //   return StayTimeout(3000ms, UF_FN(Step_HwTimeout));
     template <class Self, class... P, class... A>
-    StepResult StayUntil(Duration timeout, StepResult (Self::*fn)(P...), const char* name,
-                         A&&... args)
+    StepResult StayTimeout(Duration timeout, StepResult (Self::*fn)(P...), const char* name,
+                           A&&... args)
     {
         StepResult r = Next(fn, name, std::forward<A>(args)...);
         r.action     = StepAction::Stay;
@@ -2122,10 +2181,37 @@ protected:
         return r;
     }
 
+    // StayUntil with a wait condition (post-wait / settling). Poll 'cond' each
+    // round; once it has stayed true continuously for 'settle' of logical time,
+    // transition to 'success'. If 'timeout' elapses since step entry first,
+    // transition to 'timeout_step' instead. Pass each step target with UF_FN; in
+    // this form neither target takes bound arguments. Argument order matches the
+    // Python / C# ports: condition, settle, success, timeout, timeout step.
+    //
+    //   return StayUntil([this] { return SensorOn(); }, 3s, UF_FN(Step_Clamp),
+    //                    100s, UF_FN(Step_Error));
+    template <class Self, class CondF>
+    StepResult StayUntil(CondF cond, Duration settle, StepResult (Self::*success)(),
+                         const char* sname, Duration timeout,
+                         StepResult (Self::*timeout_step)(), const char* tname)
+    {
+        Self*      self = static_cast<Self*>(this);
+        StepResult r;
+        r.action       = StepAction::Stay;
+        r.timeout      = timeout;
+        r.next_fn      = [self, timeout_step]() -> StepResult { return (self->*timeout_step)(); };
+        r.next_name    = tname;
+        r.settle       = settle;
+        r.cond         = [cond = std::move(cond)]() -> bool { return static_cast<bool>(cond()); };
+        r.success_fn   = [self, success]() -> StepResult { return (self->*success)(); };
+        r.success_name = sname;
+        return r;
+    }
+
     // Re-Stay this step while any async submission for the flow is still in
     // flight, else advance to 'then'. The barrier-join convenience over
     // AnyAsyncPending(); for a deadline, write the explicit form by hand:
-    //   if (AnyAsyncPending()) return StayUntil(dur, UF_FN(Step_GaveUp));
+    //   if (AnyAsyncPending()) return StayTimeout(dur, UF_FN(Step_GaveUp));
     template <class Self, class... P, class... A>
     StepResult JoinAllAsync(StepResult (Self::*then)(P...), const char* name, A&&... args)
     {
@@ -2365,6 +2451,28 @@ bool Uniflow<Derived>::ExecuteOnce(IUniflowObserver& obs, RoundProfile* prof)
     //    is true iff a transition happened this round; the pump uses that
     //    to decide whether to sleep step_interval_sleep_ms / stay_sleep_ms /
     //    idle_sleep_ms before the next round. --
+    // A StayUntil wait condition that has stayed true continuously for 'settle'
+    // (post-wait / settling) becomes a transition to its success target. Checked
+    // before the timeout so a satisfied wait wins if both are ready this round.
+    if (r.action == StepAction::Stay && r.cond)
+    {
+        if (r.cond())
+        {
+            if (uf_settle_since_ == TimePoint{})
+                uf_settle_since_ = runtime_->clock().Now();
+            if (r.success_fn && runtime_->clock().Now() - uf_settle_since_ >= r.settle)
+            {
+                r.action    = StepAction::Next;
+                r.next_fn   = std::move(r.success_fn);
+                r.next_name = r.success_name;
+            }
+        }
+        else
+        {
+            uf_settle_since_ = TimePoint{};
+        }
+    }
+
     // A StayUntil whose deadline has passed becomes a transition to its
     // timeout target. Measured on the runtime's virtual clock from step entry
     // (step_started_at_v_) so the repeated Stay ticks while polling do not keep
@@ -2433,6 +2541,9 @@ bool Uniflow<Derived>::ExecuteOnce(IUniflowObserver& obs, RoundProfile* prof)
             step_tick_min_ = Clock::duration::max();
             step_tick_max_ = Clock::duration::zero();
             step_tick_sum_ = Clock::duration::zero();
+            // A Next is a step change: re-arm the auto-reset timers (built-in
+            // StepTimer + every NewAutoTimer one) and clear the settle window.
+            uf_reset_step_timers_();
         }
         else
         {
@@ -2554,7 +2665,7 @@ AsyncId Uniflow<Derived>::SubmitAsync(R (*fn)(Params...), const char* job_label,
 // declared on that task alike:
 //
 //   return Next(UF_FN(Step_WaitAtSource));
-//   return StayUntil(3000ms, UF_FN(Step_HwTimeout));
+//   return StayTimeout(3000ms, UF_FN(Step_HwTimeout));
 //   SubmitAsync(UF_FN(SimulateStartCmd));
 #define UF_FN(fn) (&std::remove_reference_t<decltype(*this)>::fn), #fn
 

@@ -49,13 +49,22 @@ class StartResult(Enum):
 class StepResult:
     """What a step returns: an intent, not a state change. Next/StayUntil carry a
     next_fn target; StayUntil also carries a timeout_sec (logical-time deadline
-    measured from step entry; 0 means a plain Stay with no step timeout)."""
+    measured from step entry; 0 means a plain Stay with no step timeout).
+
+    StayUntil may also carry a wait condition: cond is polled each round and,
+    once it has stayed true continuously for settle_sec (post-wait / settling),
+    the step transitions to success_fn. next_fn stays the timeout target. cond
+    None means the classic timeout-only Stay."""
 
     action: StepAction
     next_fn: Optional[Callable[[], "StepResult"]] = None
     next_name: str = ""
     reason: str = ""
     timeout_sec: float = 0.0
+    cond: Optional[Callable[[], bool]] = None
+    settle_sec: float = 0.0
+    success_fn: Optional[Callable[[], "StepResult"]] = None
+    success_name: str = ""
 
 
 # ----- Async support -----
@@ -104,7 +113,7 @@ class _AsyncSlot:
     id: int
     label: str
     timeout_sec: Optional[float]
-    submitted_at: float
+    submitted_at_sec: float
     fut: Future
     done: bool = False
     value: Any = None
@@ -318,9 +327,9 @@ class Config:
     flows running but every active module Stay'd this round; step: at least one
     module advanced this round (0 = burst)."""
 
-    idle_sleep: float = 0.001
-    stay_sleep: float = 0.02
-    step_interval_sleep: float = 0.0
+    idle_sleep_sec: float = 0.001
+    stay_sleep_sec: float = 0.02
+    step_interval_sleep_sec: float = 0.0
     max_inflight_async: int = 64
 
 
@@ -382,14 +391,43 @@ class Task:
                           next_fn=_bind(fn, args, kwargs),
                           next_name=_fn_name(fn))
 
-    def StayUntil(self, timeout_sec: float,
-                  fn: Callable[..., StepResult], *args, **kwargs) -> StepResult:
-        # Poll this step, but if timeout_sec of LOGICAL time elapses since step
-        # entry, transition to fn (the step-level "catch"). The deadline is
-        # measured from step entry, not from this call.
+    def StayUntil(self, condition: Callable[[], bool], settle_sec: float,
+                  success: Callable[..., StepResult],
+                  timeout_sec: float,
+                  timeout_step: Callable[..., StepResult]) -> StepResult:
+        # Wait for 'condition' with a settle window and a timeout catch, all in
+        # one step intent. Each round 'condition' is polled; once it has stayed
+        # true continuously for 'settle_sec' (post-wait / settling) the step
+        # transitions to 'success'. If 'timeout_sec' of LOGICAL time elapses
+        # since step entry first, it transitions to 'timeout_step' instead. The
+        # deadline is measured from step entry, not from this call. For a plain
+        # timeout escape with no condition (the body decides success), use
+        # StayTimeout.
+        #
+        #   return self.StayUntil(sensor_on, 3, self.Step_Clamp,
+        #                         100, self.Step_Error)
         return StepResult(StepAction.STAY,
-                          next_fn=_bind(fn, args, kwargs),
-                          next_name=_fn_name(fn),
+                          next_fn=timeout_step,
+                          next_name=_fn_name(timeout_step),
+                          timeout_sec=timeout_sec,
+                          cond=condition,
+                          settle_sec=settle_sec,
+                          success_fn=success,
+                          success_name=_fn_name(success) if success else "")
+
+    def StayTimeout(self, timeout_sec: float,
+                    timeout_step: Callable[..., StepResult], *args,
+                    **kwargs) -> StepResult:
+        # Plain step deadline (the original StayUntil): keep polling THIS step,
+        # but if 'timeout_sec' of LOGICAL time elapses since step entry,
+        # transition to 'timeout_step' - the step-level "catch". The body decides
+        # the success path with its own Next/Done/Fail; this only guarantees an
+        # exit if the wait never resolves. *args/**kwargs bind to timeout_step.
+        #
+        #   return self.StayTimeout(2.0, self.Step_AckTimeout)
+        return StepResult(StepAction.STAY,
+                          next_fn=_bind(timeout_step, args, kwargs),
+                          next_name=_fn_name(timeout_step),
                           timeout_sec=timeout_sec)
 
     def StartTask(self, other_task: "Task") -> StartResult:
@@ -437,6 +475,16 @@ class Uniflow:
         # Per-module built-in timer, bound to the runtime clock (scale / freeze).
         self.uf_timer = UFTimer(rt._clock)
 
+        # Timers re-armed on every step change (Next / StayUntil timeout / flow
+        # start / task switch) but NOT on a Stay. The built-in uf_timer is always
+        # registered; user member timers opt in via NewAutoTimer().
+        self._auto_timers: List[UFTimer] = [self.uf_timer]
+
+        # StayUntil-with-condition settle accumulator: the virtual-clock instant
+        # the wait condition last turned true (None = not currently held). Reset
+        # on every step change so settle is measured from within the step.
+        self._settle_since_sec: Optional[float] = None
+
         self._tasks: List[Task] = []
 
         # -- current position within the running flow --
@@ -447,9 +495,9 @@ class Uniflow:
         self._desc = ""
 
         self._step_ordinal = 0
-        self._flow_t0 = 0.0
-        self._step_t0 = 0.0      # real clock (profiling elapsed_ms)
-        self._step_t0_v = 0.0    # virtual clock (StayUntil deadline)
+        self._flow_t0_sec = 0.0
+        self._step_real_t0_sec = 0.0      # real clock (profiling elapsed_ms)
+        self._step_virt_t0_sec = 0.0    # virtual clock (StayUntil deadline)
         self._step_ticks = 0
 
         self.failed = False
@@ -468,6 +516,22 @@ class Uniflow:
         # task.StartFlow() knows which module to launch. Does NOT start anything.
         task._bind_flow(self)
         self._tasks.append(task)
+
+    # ----- timers -----
+    def NewAutoTimer(self) -> "UFTimer":
+        """Create a UFTimer bound to this runtime's clock and register it for
+        auto-reset: it re-arms on every step change, like the built-in uf_timer.
+        For a self-managed timer, construct UFTimer(rt._clock) directly instead."""
+        t = UFTimer(self._rt._clock)
+        self._auto_timers.append(t)
+        return t
+
+    def _reset_step_timers(self) -> None:
+        # Re-arm every auto-reset timer and clear the StayUntil settle accumulator.
+        # Called on each step change (NOT on a Stay).
+        for t in self._auto_timers:
+            t.Restart()
+        self._settle_since_sec = None
 
     def StartTask(self, task: Task) -> StartResult:
         # Launch this module's flow at 'task's Entry(). Callable from ANY thread.
@@ -490,12 +554,15 @@ class Uniflow:
             self.failed = False
             self.fail_reason = ""
             self.fail_exc = None
-            self._flow_t0 = now
-            self._step_t0 = now
-            self._step_t0_v = self._rt._clock.Now()
+            self._flow_t0_sec = now
+            self._step_real_t0_sec = now
+            self._step_virt_t0_sec = self._rt._clock.Now()
             self._async_slots = []
             self._next_async_id = 1
             self._flow_started_pending = True
+        # The first step is a step change too: arm the auto-reset timers so the
+        # entry step sees fresh timers, not time accrued since construction.
+        self._reset_step_timers()
         self._rt.Wake()
         return StartResult.Ok
 
@@ -529,11 +596,14 @@ class Uniflow:
             self._current_name = "Entry"
             self._desc = ""
             self._step_ordinal += 1
-            self._step_t0 = time.monotonic()
-            self._step_t0_v = self._rt._clock.Now()
+            self._step_real_t0_sec = time.monotonic()
+            self._step_virt_t0_sec = self._rt._clock.Now()
             self._step_ticks = 0
             # Force re-entry of the new unit (OnEnter) next round.
             self._unit_entered = None
+        # A task switch advances the step (new task's Entry next round): re-arm
+        # the auto-reset timers, same as a Next transition does.
+        self._reset_step_timers()
         return StartResult.Ok
 
     # ----- waiting / introspection -----
@@ -594,11 +664,11 @@ class Uniflow:
 
         fut = self._rt._executor.submit(lambda: fn(*args))
         # Wake the pump the instant the worker finishes so the next poll is not
-        # delayed by a full stay_sleep nap. The callback runs on a worker thread;
+        # delayed by a full stay_sleep_sec nap. The callback runs on a worker thread;
         # Wake() is thread-safe.
         fut.add_done_callback(lambda _f: self._rt.Wake())
         slot = _AsyncSlot(id=self._next_async_id, label=label,
-                          timeout_sec=timeout_sec, submitted_at=time.monotonic(),
+                          timeout_sec=timeout_sec, submitted_at_sec=time.monotonic(),
                           fut=fut)
         self._next_async_id += 1
         self._async_slots.append(slot)
@@ -629,7 +699,7 @@ class Uniflow:
         # OnAsyncAbandoned fires per abandoned worker so the leak is visible.
         for s in self._async_slots:
             if not s.done:
-                pending_ms = (time.monotonic() - s.submitted_at) * 1000.0
+                pending_ms = (time.monotonic() - s.submitted_at_sec) * 1000.0
                 self._rt._observer.OnAsyncAbandoned(self._name, s.label, pending_ms)
         self._async_slots = []
 
@@ -639,7 +709,7 @@ class Uniflow:
         for s in self._async_slots:
             if s.done:
                 continue
-            elapsed = now - s.submitted_at
+            elapsed = now - s.submitted_at_sec
             ready = s.fut.done()
             timed_out = s.timeout_sec is not None and elapsed >= s.timeout_sec
             if not ready and not timed_out:
@@ -702,14 +772,29 @@ class Uniflow:
         if isinstance(result, StartResult):
             return False
 
-        # A StayUntil whose deadline (logical time, from step entry) has passed
-        # becomes a transition to its timeout target.
-        if result.action is StepAction.STAY and result.timeout_sec > 0.0 and \
-                (self._rt._clock.Now() - self._step_t0_v) >= result.timeout_sec:
-            self._transition(observer, prev_name, result.next_fn, result.next_name)
-            return True
-
         if result.action is StepAction.STAY:
+            now_v = self._rt._clock.Now()
+            # A StayUntil wait condition that has stayed true for settle_sec
+            # (post-wait / settling) transitions to its success target. Checked
+            # before the timeout so a satisfied wait wins if both are ready.
+            if result.cond is not None:
+                cond_true = result.cond() if callable(result.cond) else bool(result.cond)
+                if cond_true:
+                    if self._settle_since_sec is None:
+                        self._settle_since_sec = now_v
+                    if (now_v - self._settle_since_sec) >= result.settle_sec \
+                            and result.success_fn is not None:
+                        self._transition(observer, prev_name,
+                                         result.success_fn, result.success_name)
+                        return True
+                else:
+                    self._settle_since_sec = None
+            # A StayUntil whose deadline (logical time, from step entry) has
+            # passed becomes a transition to its timeout target.
+            if result.timeout_sec > 0.0 and \
+                    (now_v - self._step_virt_t0_sec) >= result.timeout_sec:
+                self._transition(observer, prev_name, result.next_fn, result.next_name)
+                return True
             return False
 
         if result.action is StepAction.NEXT:
@@ -722,7 +807,7 @@ class Uniflow:
 
     def _transition(self, observer: Observer, prev_name: str,
                     next_fn, next_name: str) -> None:
-        elapsed_ms = (time.monotonic() - self._step_t0) * 1000.0
+        elapsed_ms = (time.monotonic() - self._step_real_t0_sec) * 1000.0
         observer.OnStepChanged(self._name, prev_name, next_name, self._desc,
                                self._step_ordinal, elapsed_ms, self._step_ticks)
         with self._lock:
@@ -730,14 +815,14 @@ class Uniflow:
             self._current_name = next_name
             self._desc = ""
             self._step_ordinal += 1
-            self._step_t0 = time.monotonic()
-            self._step_t0_v = self._rt._clock.Now()
+            self._step_real_t0_sec = time.monotonic()
+            self._step_virt_t0_sec = self._rt._clock.Now()
             self._step_ticks = 0
-        self.uf_timer.Restart()
+        self._reset_step_timers()
 
     def _end_flow(self, action: StepAction, observer: Observer,
                   reason: str = "", exc: Optional[BaseException] = None) -> None:
-        elapsed_ms = (time.monotonic() - self._step_t0) * 1000.0
+        elapsed_ms = (time.monotonic() - self._step_real_t0_sec) * 1000.0
         prev_name = self._current_name
         observer.OnStepChanged(self._name, prev_name, "", self._desc,
                                self._step_ordinal, elapsed_ms, self._step_ticks)
@@ -748,7 +833,7 @@ class Uniflow:
                 self.fail_reason = reason
                 if exc is not None:
                     self.fail_exc = exc
-            wall_ms = (time.monotonic() - self._flow_t0) * 1000.0
+            wall_ms = (time.monotonic() - self._flow_t0_sec) * 1000.0
             final_ordinal = self._step_ordinal
             self._drop_async_slots()
             self._active_task = None
@@ -871,11 +956,11 @@ class Runtime:
                     outcome = 2
 
             if outcome == 2:
-                nap = self._config.step_interval_sleep
+                nap = self._config.step_interval_sleep_sec
             elif outcome == 1:
-                nap = self._config.stay_sleep
+                nap = self._config.stay_sleep_sec
             else:
-                nap = self._config.idle_sleep
+                nap = self._config.idle_sleep_sec
             if nap > 0:
                 with self._wake_cv:
                     if not self._wake_requested:

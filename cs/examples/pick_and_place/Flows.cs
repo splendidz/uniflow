@@ -9,7 +9,7 @@
 //     in zone B. Solved purely by reading peer members (InsideZoneB / Carrying);
 //     no locks, because every module advances on the same pump thread round-robin.
 //   - async-poll command acks: the Stage's start/cleanup commands are SubmitAsync
-//     workers, polled by AsyncId with a StayUntil timeout catch - the pump never
+//     workers, polled by AsyncId with a StayTimeout timeout catch - the pump never
 //     blocks on them.
 //   - multi-task module: one module (the Stage) holds three tasks and the
 //     orchestrator runs them one at a time.
@@ -569,7 +569,7 @@ namespace Uniflow.PickAndPlaceExample
                 if (r.Pending)
                 {
                     Describe("wait start ack");
-                    return StayUntil(2.0, Step_StartAckTimeout);
+                    return StayTimeout(2.0, Step_StartAckTimeout);
                 }
                 if (!r.Ok || !r.ReturnValue)
                 {
@@ -601,7 +601,7 @@ namespace Uniflow.PickAndPlaceExample
                     return Done();
                 }
                 Describe("wait hw ready");
-                return StayUntil(3.0, Step4_HwTimeout);
+                return StayTimeout(3.0, Step4_HwTimeout);
             }
 
             private StepResult Step4_HwTimeout()
@@ -684,7 +684,7 @@ namespace Uniflow.PickAndPlaceExample
                 if (r.Pending)
                 {
                     Describe("wait cleanup ack");
-                    return StayUntil(2.0, Step_CleanupAckTimeout);
+                    return StayTimeout(2.0, Step_CleanupAckTimeout);
                 }
                 if (!r.Ok || !r.ReturnValue)
                 {

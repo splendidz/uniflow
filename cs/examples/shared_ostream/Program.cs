@@ -145,7 +145,7 @@ namespace SharedOstreamExample
             // ConsoleObserver trace so only the program's own output appears.
             // Stay() comes back immediately - the two writers ping-pong via the
             // turn flag, so spin both modules tight (no stay/step nap).
-            var cfg = new Config { IdleSleep = 0.001, StaySleep = 0.0, StepIntervalSleep = 0.0 };
+            var cfg = new Config { IdleSleepSec = 0.001, StaySleepSec = 0.0, StepIntervalSleepSec = 0.0 };
             Rt = new Runtime(new Runtime.Options { Observer = new Observer(), Config = cfg });
             _hello = new Flow_Writer(Rt, "Hello ", Repeats, 0);
             _world = new Flow_Writer(Rt, "World. ", Repeats, 1);

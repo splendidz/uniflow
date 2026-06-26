@@ -30,9 +30,9 @@ namespace Uniflow.Examples.QueueDrain
             // burst on any-Next round, short stay nap, tiny idle nap.
             Config cfg = new Config
             {
-                IdleSleep = 0.001,
-                StaySleep = 0.02,
-                StepIntervalSleep = 0.0,
+                IdleSleepSec = 0.001,
+                StaySleepSec = 0.02,
+                StepIntervalSleepSec = 0.0,
             };
             Rt = new Runtime(new Runtime.Options { Observer = new Observer(), Config = cfg });
 

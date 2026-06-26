@@ -117,8 +117,8 @@ class App:
         # default ConsoleObserver trace so only the program's own output appears.
         # Stay() comes back immediately - the two writers ping-pong via the turn
         # flag, so spin both modules tight.
-        config = uniflow.Config(idle_sleep=0.001, stay_sleep=0.0,
-                                step_interval_sleep=0.0)
+        config = uniflow.Config(idle_sleep_sec=0.001, stay_sleep_sec=0.0,
+                                step_interval_sleep_sec=0.0)
         self.rt = uniflow.Runtime(observer=uniflow.Observer(), config=config)
         self.hello = Flow_Writer(self.rt, "Hello ", self.kRepeats, 0)
         self.world = Flow_Writer(self.rt, "World. ", self.kRepeats, 1)

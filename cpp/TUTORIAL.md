@@ -26,7 +26,7 @@ Or with g++:
 g++ -std=c++17 -O2 -pthread -I . tutorial/chap01.cpp -o chap01
 ```
 
-> Every chapter starts with `#include "uniflow.hpp"`. No other dependencies. The only macro required is `UF_FN(step)`, which passes a step function to `Next` / `StayUntil` / `SubmitAsync` as a pointer-plus-label pair.
+> Every chapter starts with `#include "uniflow.hpp"`. No other dependencies. The only macro required is `UF_FN(step)`, which passes a step function to `Next` / `StayTimeout` / `StayUntil` / `SubmitAsync` as a pointer-plus-label pair.
 
 ---
 
@@ -226,9 +226,11 @@ t.HeldFor(cond, 50ms);     // bool: has 'cond' been continuously true for 50ms?
 
 **Where to keep it.** A timer that spans steps (armed in step A, checked in step B) must outlive the step. Make it a **member of the task** and re-arm it in `OnEnter()`, as with `t_` above. Because the timer belongs to the task, it survives every `Stay()` re-entry and is reset at the next task entry, with no manual bookkeeping.
 
+**Built-in per-step timer.** Every module also has a built-in timer reached from a step via `flow().StepTimer()`. Unlike the per-task `TaskContext::Elapsed()` (reset on task entry), it is re-armed on **every step change** - a `Next`, a `StayUntil` timeout, a task switch, or flow start - but not on a `Stay`, so it measures time within the current step with no member to declare. To give your own member timers the same auto-reset, create them with `flow().NewAutoTimer()` instead of a plain `UFTimer`; the module re-arms every registered timer on each step change. A `UFTimer` you reset yourself is unaffected.
+
 > **One clock that can be scaled or frozen.** Bind a timer to the runtime - `uniflow::UFTimer t{rt.clock()}` - and it follows that runtime's virtual clock. `rt.clock().SetScale(10)` plays the whole flow back at 10x; `rt.clock().Freeze()` / `.Resume()` holds every logical timeout in place (for example during an e-stop, so a 3s timeout does not fire while the line is paused). A plain `UFTimer{}` uses real time. Async / IO deadlines always remain on real time, regardless of scale. Chapter 10 covers this.
 
-To poll a condition but **route to a recovery step if it never arrives**, see `StayUntil` in Chapter 7.
+To poll a condition but **route to a recovery step if it never arrives**, see `StayTimeout` / `StayUntil` in Chapter 7.
 
 ---
 
@@ -520,11 +522,11 @@ StepResult Step2_After(uniflow::AsyncId id)
 
 `AsyncOutcome<T>` classifies the slot - `is_timeout()`, `failed()`, `ok()`, `pending()` - so a result that is not present is never dereferenced. (There is no `.value()` or `.exception()`; the value lives in `return_value`, engaged only when `ok()`.)
 
-### Step deadline - `StayUntil`, the step-level `catch`
+### Step deadline - `StayTimeout`, the step-level `catch`
 
 Often the step is not waiting on a job at all: it commanded some hardware and is now `Stay()`-polling a "done" flag, a sensor, or a peer module's state. If the condition never arrives - a jammed axis, a lost encoder, a stuck valve - a bare `Stay()` loop polls indefinitely. The line then hangs with no error, which on a real machine is among the worst outcomes.
 
-`StayUntil(dur, UF_FN(fn))` is a `Stay()` with a deadline: keep polling this step, but if `dur` elapses since the step was entered, route to step `fn` instead. `fn` is the `catch`, a guaranteed exit to a known recovery path.
+`StayTimeout(dur, UF_FN(fn))` is a `Stay()` with a deadline: keep polling this step, but if `dur` elapses since the step was entered, route to step `fn` instead. `fn` is the `catch`, a guaranteed exit to a known recovery path. (The body still owns the happy path - it returns `Next`/`Done` itself; the deadline only guarantees an exit if the wait never resolves.)
 
 The full pattern is command, wait-with-deadline, recover:
 
@@ -546,7 +548,7 @@ StepResult Step2_WaitInPos()
         return Next(UF_FN(Step3_Clamp));
     }
     // still moving - keep polling, but give up if it stalls past 2s
-    return StayUntil(2000ms, UF_FN(Step_Stalled));
+    return StayTimeout(2000ms, UF_FN(Step_Stalled));
 }
 
 // Reached ONLY if InPosition never became true within 2s of entering the
@@ -559,7 +561,7 @@ StepResult Step_Stalled()
 }
 ```
 
-Without `StayUntil`, `Step2_WaitInPos` returning a bare `Stay()` would spin until someone notices the line is dead. With it, the flow is guaranteed to reach `Step_Stalled` if the move does not complete; the flow always makes forward progress to a defined state.
+Without `StayTimeout`, `Step2_WaitInPos` returning a bare `Stay()` would spin until someone notices the line is dead. With it, the flow is guaranteed to reach `Step_Stalled` if the move does not complete; the flow always makes forward progress to a defined state.
 
 **The recovery step is an ordinary step, so it can route anywhere.** A common shape is retry, then give up:
 
@@ -570,7 +572,7 @@ StepResult Step2_WaitInPos()
     {
         return Next(UF_FN(Step3_Clamp));
     }
-    return StayUntil(2000ms, UF_FN(Step_Retry));
+    return StayTimeout(2000ms, UF_FN(Step_Retry));
 }
 
 StepResult Step_Retry()
@@ -590,9 +592,9 @@ StepResult Step_Retry()
 
 Three points worth noting:
 
-- **The deadline is measured from step entry, not from the `StayUntil` call.** It is returned on every poll tick, but the clock does not restart each tick; a step that polls for 2s times out at 2s.
+- **The deadline is measured from step entry, not from the `StayTimeout` call.** It is returned on every poll tick, but the clock does not restart each tick; a step that polls for 2s times out at 2s.
 - **It is logical time.** The deadline runs on the runtime's clock (`rt.clock()` from Chapter 3), so `Freeze()` holds it - a 2s timeout does not fire while the line is e-stopped - and `SetScale` scales it. The `SubmitAsync` deadline stays on real time.
-- **Two timeouts, two roles.** The `SubmitAsync` timeout means "this job must finish within T" (read `is_timeout()` when polling). `StayUntil` means "this step must make progress within T" (the flow lands in a recovery step). Use the first for async work, the second for polled conditions.
+- **Two timeouts, two roles.** The `SubmitAsync` timeout means "this job must finish within T" (read `is_timeout()` when polling). `StayTimeout` means "this step must make progress within T" (the flow lands in a recovery step). Use the first for async work, the second for polled conditions.
 
 It pairs with `HeldFor` (Chapter 3): require the flag to be stable, but still route out if it never settles:
 
@@ -603,10 +605,22 @@ StepResult Step2_WaitReady()
     {
         return Next(UF_FN(Step3_Done));
     }
-    return StayUntil(3000ms, UF_FN(Step_Timeout));            // never settled -> recover
+    return StayTimeout(3000ms, UF_FN(Step_Timeout));          // never settled -> recover
 }
 // settle_ is a UFTimer member of the task, re-armed in OnEnter().
 ```
+
+This wait-with-settle pairing is common enough that **`StayUntil`** folds it into one call: a wait condition, a settle duration, and both targets. `condition` is polled each round; once it has stayed true for `settle`, the step routes to the success target, but if `timeout` elapses first it routes to the timeout target instead. The argument order is `condition, settle, success, timeout, timeout_step` (the same across the Python / C# ports). The whole `Step2_WaitReady` above becomes one line:
+
+```cpp
+StepResult Step2_WaitReady()
+{
+    return StayUntil([this] { return flow().hw_ready_->IsReady(); }, 50ms,
+                     UF_FN(Step3_Done), 3000ms, UF_FN(Step_Timeout));
+}
+```
+
+The settle window here is tracked by the framework (no member timer needed), reset on each step entry like the built-in timer below.
 
 **If a step body throws an exception:** by default, the whole process terminates (`std::terminate`). To continue instead, override `CatchStepExceptions()` on the module to return `true`:
 
@@ -802,7 +816,7 @@ All three operations flow through the observer. Control flow that hops pump thre
 
 ## Chapter 10. Virtual time - speed, freeze, e-stop
 
-Every `UFTimer` and every `StayUntil` deadline reads its time from the runtime's virtual clock, not directly from the wall clock. By default it tracks real time 1:1, but it can be scaled or frozen, and every logical timer on that runtime moves with it.
+Every `UFTimer` and every `StayTimeout` / `StayUntil` deadline reads its time from the runtime's virtual clock, not directly from the wall clock. By default it tracks real time 1:1, but it can be scaled or frozen, and every logical timer on that runtime moves with it.
 
 ```cpp
 rt.clock().SetScale(10.0);   // logical time runs 10x faster
@@ -813,10 +827,10 @@ rt.clock().Resume();         // ... and continues from where it froze
 
 This provides two capabilities:
 
-- **Simulation playback.** A flow with `Passed(5000ms)` waits and `StayUntil(3000ms, ...)` timeouts runs at the configured rate: drive a day-long line cycle in seconds for testing, or slow it down to observe. The [simulator](examples/simulator/) example is this case: five runners and a renderer share one clock, and a single `SetScale` / `Freeze` rescales or pauses the whole field at once.
+- **Simulation playback.** A flow with `Passed(5000ms)` waits and `StayTimeout(3000ms, ...)` timeouts runs at the configured rate: drive a day-long line cycle in seconds for testing, or slow it down to observe. The [simulator](examples/simulator/) example is this case: five runners and a renderer share one clock, and a single `SetScale` / `Freeze` rescales or pauses the whole field at once.
 - **A correct pause.** During an e-stop / hold, a 3-second "hw ready" timeout should not fire merely because the line sat still for 10 seconds. `Freeze()` stops every logical deadline; `Resume()` continues from where it left off, so timeouts measure running time, not wall time.
 
-**What scales and what does not.** The virtual clock governs logical waits only - `UFTimer` (`Elapsed` / `Passed` / `HeldFor`) and `StayUntil`. It deliberately does **not** affect the `SubmitAsync` deadline or the pump's own sleep: a real network call does not finish faster because the sim was scaled, so those stay on the real wall clock.
+**What scales and what does not.** The virtual clock governs logical waits only - `UFTimer` (`Elapsed` / `Passed` / `HeldFor`) and `StayTimeout` / `StayUntil`. It deliberately does **not** affect the `SubmitAsync` deadline or the pump's own sleep: a real network call does not finish faster because the sim was scaled, so those stay on the real wall clock.
 
 **Binding.** A timer built as `uniflow::UFTimer{rt.clock()}` follows that runtime's clock. A plain `uniflow::UFTimer{}` uses real time, which applies when a wall-clock measurement that ignores scale / freeze is required. To read virtual time directly, use `rt.clock().Now()`.
 
@@ -1019,7 +1033,7 @@ StepResult Flow_Stage::Task_Prepare::Step2_WaitReady()
         flow().state_ = StageState::Prepared;
         return Done();                                        // orchestrator runs Process next
     }
-    return StayUntil(3000ms, UF_FN(Step_Timeout));            // never settled -> recover
+    return StayTimeout(3000ms, UF_FN(Step_Timeout));          // never settled -> recover
 }
 ```
 
@@ -1029,7 +1043,7 @@ Compare this to threading a struct by hand through every step: the unit owns its
 
 A three-step poller does not need three units. It is one task with one `Entry()`, exactly what Chapters 1-12 used. The model is uniform: a one-step flow and a thirty-step, three-task flow are written the same way, so the structure is present when a flow grows and adds little overhead when it does not.
 
-> The full, running version of everything in this chapter is [pick_and_place](examples/pick_and_place/): two pickers as `Pick -> Place` task pairs, a Stage as `Prepare -> Process -> Cleanup`, with per-unit timers, async commands, and a `StayUntil` hardware timeout. It is the reference read for multi-task flows.
+> The full, running version of everything in this chapter is [pick_and_place](examples/pick_and_place/): two pickers as `Pick -> Place` task pairs, a Stage as `Prepare -> Process -> Cleanup`, with per-unit timers, async commands, and a `StayTimeout` hardware timeout. It is the reference read for multi-task flows.
 
 ---
 
