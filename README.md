@@ -327,7 +327,12 @@ void OnNetworkReceived(Packet pkt)
 
 ### 2. Single Thread, Many Modules - cooperative execution on a single thread
 
-<!-- diagram: Runtime structure (1 thread, N modules, thread pool) -->
+<p align="center">
+  <img src=".res/uniflow_diagram.png" alt="Lock-and-pray threads vs. one cooperative pump" width="860"/>
+</p>
+<p align="center">
+  <sub>Left: threads contend for shared state behind locks. Right: one pump thread runs each flow's task steps in turn, so shared state is lock-free.</sub>
+</p>
 
 One `Runtime` owns one pump thread. You can attach as many modules as you like onto this thread, and the pump runs every module once, in order, each round.
 

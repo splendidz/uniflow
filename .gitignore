@@ -118,3 +118,6 @@ Desktop.ini
 
 # Local-only docs (design notes, GitHub Pages, diagrams) - not published.
 docs/
+
+# Local-only working notes (Reddit draft, etc.) - not published.
+reddit_post.md

@@ -327,7 +327,12 @@ void OnNetworkReceived(Packet pkt)
 
 ### 2. Single Thread, Many Modules - 단일 스레드 협동 실행
 
-<!-- 다이어그램: Runtime 구조도 (1 thread, N modules, thread pool) -->
+<p align="center">
+  <img src=".res/uniflow_diagram.png" alt="락 기반 멀티스레드 vs 협력형 단일 펌프" width="860"/>
+</p>
+<p align="center">
+  <sub>왼쪽: 여러 스레드가 락 뒤에서 공유 상태를 두고 경합한다. 오른쪽: 펌프 스레드 하나가 각 flow의 task step을 번갈아 호출하므로 공유 상태에 락이 필요 없다.</sub>
+</p>
 
 하나의 `Runtime`은 하나의 펌프 스레드를 소유한다. 이 스레드 위에 원하는 만큼의 모듈을 붙일 수 있으며, 펌프는 매 라운드마다 모든 모듈을 순서대로 한 번씩 실행한다.
 
