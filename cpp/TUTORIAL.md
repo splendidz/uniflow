@@ -44,7 +44,7 @@ public:
     explicit Flow_Hello(uniflow::Runtime& rt)
         : uniflow::Uniflow<Flow_Hello>(rt, "Flow_Hello")
     {
-        AddTask(ctx_say_);
+        AddTask(task_say_);
     }
 
     // The task is public so any thread (here, main) can launch it.
@@ -58,14 +58,14 @@ public:
             std::cout << "hello from a step\n";
             return Done();
         }
-    } ctx_say_;
+    } task_say_;
 };
 
 int main()
 {
     uniflow::Runtime rt;
     Flow_Hello       hello{rt};
-    hello.ctx_say_.StartFlow();   // launch the task
+    hello.task_say_.StartFlow();   // launch the task
     hello.WaitUntilIdle();
 }
 ```
@@ -80,8 +80,8 @@ hello from a step
 
 **What happened**
 - `Runtime rt;` started one pump thread.
-- `Flow_Hello hello{rt};` attached the module; the pump visits `hello` every round from this point on. The constructor calls `AddTask(ctx_say_)` once, which wires the task's `flow()` back-pointer.
-- `hello.ctx_say_.StartFlow()` armed the flow at the task's `Entry()` step. The step runs on the next round.
+- `Flow_Hello hello{rt};` attached the module; the pump visits `hello` every round from this point on. The constructor calls `AddTask(task_say_)` once, which wires the task's `flow()` back-pointer.
+- `hello.task_say_.StartFlow()` armed the flow at the task's `Entry()` step. The step runs on the next round.
 - `Entry()` returned `Step1_Hello()`, which printed and returned `Done()`, so the module returns to idle.
 
 **The pieces, named once.** A *module* (`Flow_Hello`) is the durable object on the runtime. A *task* (`Task_Say`) is one unit of work it can run. A *step* (`Step1_Hello`) is one cooperative slice of that task. Steps are numbered (`Step1_`, `Step2_`, ...) and live as private members of their task; only the task itself is public, because launching it is the only operation the outside world performs.
@@ -104,7 +104,7 @@ public:
     explicit Flow_Greet(uniflow::Runtime& rt)
         : uniflow::Uniflow<Flow_Greet>(rt, "Flow_Greet")
     {
-        AddTask(ctx_greet_);
+        AddTask(task_greet_);
     }
 
     struct Task_Greet : uniflow::Task<Flow_Greet>
@@ -127,14 +127,14 @@ public:
             std::cout << "3. see you again\n";
             return Done();
         }
-    } ctx_greet_;
+    } task_greet_;
 };
 
 int main()
 {
     uniflow::Runtime rt;
     Flow_Greet       greet{rt};
-    greet.ctx_greet_.StartFlow();
+    greet.task_greet_.StartFlow();
     greet.WaitUntilIdle();
 }
 ```
@@ -167,7 +167,7 @@ public:
     explicit Flow_Counter(uniflow::Runtime& rt)
         : uniflow::Uniflow<Flow_Counter>(rt, "Flow_Counter")
     {
-        AddTask(ctx_count_);
+        AddTask(task_count_);
     }
 
     struct Task_Count : uniflow::Task<Flow_Counter>
@@ -190,14 +190,14 @@ public:
             }
             return Stay();   // not yet - come back next round
         }
-    } ctx_count_;
+    } task_count_;
 };
 
 int main()
 {
     uniflow::Runtime rt;
     Flow_Counter     counter{rt};
-    counter.ctx_count_.StartFlow();
+    counter.task_count_.StartFlow();
     counter.WaitUntilIdle();
 }
 ```
@@ -226,7 +226,7 @@ t.HeldFor(cond, 50ms);     // bool: has 'cond' been continuously true for 50ms?
 
 **Where to keep it.** A timer that spans steps (armed in step A, checked in step B) must outlive the step. Make it a **member of the task** and re-arm it in `OnEnter()`, as with `t_` above. Because the timer belongs to the task, it survives every `Stay()` re-entry and is reset at the next task entry, with no manual bookkeeping.
 
-**Built-in per-step timer.** Every module also has a built-in timer reached from a step via `flow().StepTimer()`. Unlike the per-task `TaskContext::Elapsed()` (reset on task entry), it is re-armed on **every step change** - a `Next`, a `StayUntil` timeout, a task switch, or flow start - but not on a `Stay`, so it measures time within the current step with no member to declare. To give your own member timers the same auto-reset, create them with `flow().NewAutoTimer()` instead of a plain `UFTimer`; the module re-arms every registered timer on each step change. A `UFTimer` you reset yourself is unaffected.
+**Built-in per-step timer.** Every module also has a built-in timer reached from a step via `flow().StepTimer()`. Unlike the per-task `TaskBase::Elapsed()` (reset on task entry), it is re-armed on **every step change** - a `Next`, a `StayUntil` timeout, a task switch, or flow start - but not on a `Stay`, so it measures time within the current step with no member to declare. To give your own member timers the same auto-reset, create them with `flow().NewAutoTimer()` instead of a plain `UFTimer`; the module re-arms every registered timer on each step change. A `UFTimer` you reset yourself is unaffected.
 
 > **One clock that can be scaled or frozen.** Bind a timer to the runtime - `uniflow::UFTimer t{rt.clock()}` - and it follows that runtime's virtual clock. `rt.clock().SetScale(10)` plays the whole flow back at 10x; `rt.clock().Freeze()` / `.Resume()` holds every logical timeout in place (for example during an e-stop, so a 3s timeout does not fire while the line is paused). A plain `UFTimer{}` uses real time. Async / IO deadlines always remain on real time, regardless of scale. Chapter 10 covers this.
 
@@ -291,7 +291,7 @@ public:
     explicit Flow_Ping(uniflow::Runtime& rt)
         : uniflow::Uniflow<Flow_Ping>(rt, "Flow_Ping")
     {
-        AddTask(ctx_ping_);
+        AddTask(task_ping_);
     }
 
     struct Task_Ping : uniflow::Task<Flow_Ping>
@@ -316,7 +316,7 @@ public:
             --count_;
             return Stay();
         }
-    } ctx_ping_;
+    } task_ping_;
 };
 
 class Flow_Pong : public uniflow::Uniflow<Flow_Pong>
@@ -325,7 +325,7 @@ public:
     explicit Flow_Pong(uniflow::Runtime& rt)
         : uniflow::Uniflow<Flow_Pong>(rt, "Flow_Pong")
     {
-        AddTask(ctx_pong_);
+        AddTask(task_pong_);
     }
 
     struct Task_Pong : uniflow::Task<Flow_Pong>
@@ -350,7 +350,7 @@ public:
             --count_;
             return Stay();
         }
-    } ctx_pong_;
+    } task_pong_;
 };
 
 int main()
@@ -358,8 +358,8 @@ int main()
     uniflow::Runtime rt;
     Flow_Ping        ping{rt};
     Flow_Pong        pong{rt};
-    ping.ctx_ping_.StartFlow();
-    pong.ctx_pong_.StartFlow();
+    ping.task_ping_.StartFlow();
+    pong.task_pong_.StartFlow();
     ping.WaitUntilIdle();
     pong.WaitUntilIdle();
     std::cout << shared::g_log.str();
@@ -377,7 +377,7 @@ ping pong
 
 Neither `g_log` nor `g_turn` has a mutex; both are accessed only from the same pump thread.
 
-**Reaching a module's own state: `flow()`.** A step is a member of its task, not of the module, so `this` is the task. The owning module, where the durable hardware / peer state lives, is reached through `flow()`, a typed reference wired by `AddTask`. Because the task is a nested type of the module, `flow()` can read the module's private members as well: `flow().axis_->Move(...)`, `flow().PartnerInZoneB()`. A sibling task's state is reached the same way: `flow().ctx_other_`.
+**Reaching a module's own state: `flow()`.** A step is a member of its task, not of the module, so `this` is the task. The owning module, where the durable hardware / peer state lives, is reached through `flow()`, a typed reference wired by `AddTask`. Because the task is a nested type of the module, `flow()` can read the module's private members as well: `flow().axis_->Move(...)`, `flow().PartnerInZoneB()`. A sibling task's state is reached the same way: `flow().task_other_`.
 
 **Note:** creating two Runtimes produces two pump threads. At that point shared state between modules on different Runtimes requires synchronisation, and the lock-free ways to bridge them (`Post` / `Link`) are covered in Chapter 9. One Runtime is usually sufficient.
 
@@ -400,7 +400,7 @@ public:
     explicit Flow_Fetcher(uniflow::Runtime& rt)
         : uniflow::Uniflow<Flow_Fetcher>(rt, "Flow_Fetcher")
     {
-        AddTask(ctx_fetch_);
+        AddTask(task_fetch_);
     }
 
     struct Task_Fetch : uniflow::Task<Flow_Fetcher>
@@ -446,14 +446,14 @@ public:
             // ... real HTTP call happens here, on a pool thread ...
             return "<html>...</html>";
         }
-    } ctx_fetch_;
+    } task_fetch_;
 };
 
 int main()
 {
     uniflow::Runtime rt;
     Flow_Fetcher     fetcher{rt};
-    fetcher.ctx_fetch_.StartFlow();
+    fetcher.task_fetch_.StartFlow();
     fetcher.WaitUntilIdle();
 }
 ```
@@ -757,7 +757,7 @@ This is the same pattern as libuv's `uv_async_send` or Qt's `invokeMethod(..., Q
 
 > For richer logging, `PostAt(caller, fn)` tags the call with its source location (file / line / function) so `OnPostSubmitted` / `OnPostExecuted` can report where the callback originated. Bare `Post` posts with a blank call site.
 
-**Rule:** a posted callback is a raw callback running outside the step / flow model (no trace). It must therefore be short and non-blocking. Holding the pump too long stalls that whole runtime. For blocking work, start a flow from inside the callback with `ctx.StartFlow()`.
+**Rule:** a posted callback is a raw callback running outside the step / flow model (no trace). It must therefore be short and non-blocking. Holding the pump too long stalls that whole runtime. For blocking work, start a flow from inside the callback with `task.StartFlow()`.
 
 ### `PostAndWait` - when you need a value back
 
@@ -787,7 +787,7 @@ uniflow::Runtime sub_rt;
 Flow_Something m{sub_rt};   // module belongs to sub_rt
 rt.Link(sub_rt);           // but rt's pump drives m
 
-m.ctx_run_.StartFlow();    // runs on rt's pump
+m.task_run_.StartFlow();    // runs on rt's pump
 ```
 
 Once fused, `rt`'s modules and `sub_rt`'s modules are serialized on one thread, so shared state between them needs no lock either. Each module keeps its own slow thresholds / observer / executor; only the pump's sleep cadence follows the driver's `Config`. `LinkAt` captures the call site for the `OnLinked` observer callback.
@@ -848,7 +848,7 @@ Real systems receive events from threads other than the pump: a socket receiving
 // on some I/O thread:
 void OnNetworkMessage()
 {
-    App::inst().handler.ctx_handle_.StartFlow();
+    App::inst().handler.task_handle_.StartFlow();
 }
 ```
 
@@ -879,14 +879,14 @@ A module is either *idle* (no task running) or *busy* (one task running; a modul
 ```cpp
 if (worker.IsIdle())
 {
-    worker.ctx_run_.StartFlow();
+    worker.task_run_.StartFlow();
 }
 ```
 
 - **`WaitUntilIdle()`** - block the calling thread until the running task finishes. This is how `main()` waits for work to drain before exiting. Call it from the owning thread, never from inside a step (a step blocking on its own pump would deadlock):
 
 ```cpp
-pipe.ctx_fetch_.StartFlow();
+pipe.task_fetch_.StartFlow();
 pipe.WaitUntilIdle();          // main thread parks here until the task ends
 ```
 
@@ -935,8 +935,8 @@ public:
     explicit Flow_Loader(uniflow::Runtime& rt)
         : uniflow::Uniflow<Flow_Loader>(rt, "Flow_Loader")
     {
-        AddTask(ctx_pick_);
-        AddTask(ctx_place_);
+        AddTask(task_pick_);
+        AddTask(task_place_);
     }
 
     // Unit: Pick - approach the source, grip, lift, then hand off to Place.
@@ -949,7 +949,7 @@ public:
         StepResult Step2_WaitAtSource();
         StepResult Step3_Grip();
         StepResult Step4_Lift();
-    } ctx_pick_;
+    } task_pick_;
 
     // Unit: Place - carry to the destination and release.
     struct Task_Place : uniflow::Task<Flow_Loader>
@@ -960,7 +960,7 @@ public:
         StepResult Step1_MoveToDest();
         StepResult Step2_WaitAtDest();
         StepResult Step3_Release();
-    } ctx_place_;
+    } task_place_;
 
 private:
     Motion* axis_;   // durable hardware, reached as flow().axis_
@@ -985,7 +985,7 @@ StepResult Flow_Loader::Task_Pick::Step4_Lift()
 {
     if (flow().axis_->AtPickHeight())
     {
-        return StartTask(flow().ctx_place_);   // Pick done -> enter Place
+        return StartTask(flow().task_place_);   // Pick done -> enter Place
     }
     return Stay();
 }
@@ -997,7 +997,7 @@ This is the purpose of the construct - invariants that no longer have to be main
 
 1. **A step's membership is fixed by its type.** `Task_Pick::Step1_MoveToSource` is a member of `Task_Pick`. Reading any one step identifies its unit; it cannot be renamed into the wrong group.
 2. **Unit boundaries are explicit.** Inside `Task_Pick`, `Next(UF_FN(...))` can only name another `Task_Pick` step, because `UF_FN` resolves the name against the current task type. Naming a `Task_Place` step is a type mismatch and does not compile. The only way out of a unit is `StartTask`, so a flow cannot silently fall from one operation into the next.
-3. **Entry is a contract.** `StartTask(flow().ctx_place_)` lands on `Task_Place::Entry()` and nowhere else. A unit's internal steps are private and cannot be entered from outside, so a unit's internals can be rearranged without touching any caller.
+3. **Entry is a contract.** `StartTask(flow().task_place_)` lands on `Task_Place::Entry()` and nowhere else. A unit's internal steps are private and cannot be entered from outside, so a unit's internals can be rearranged without touching any caller.
 
 ### Two ways to sequence units
 
@@ -1021,7 +1021,7 @@ private:
     StepResult Step1_SendStart();
     StepResult Step2_WaitReady();
     StepResult Step_Timeout();
-} ctx_prepare_;
+} task_prepare_;
 ```
 
 ```cpp
@@ -1058,7 +1058,7 @@ public:
     explicit Flow_Orchestrator(uniflow::Runtime& rt)
         : uniflow::Uniflow<Flow_Orchestrator>(rt, "Flow_Orchestrator")
     {
-        AddTask(ctx_schedule_);
+        AddTask(task_schedule_);
     }
 
     struct Task_Schedule : uniflow::Task<Flow_Orchestrator>
@@ -1067,7 +1067,7 @@ public:
 
     private:
         StepResult Step1_Tick();
-    } ctx_schedule_;
+    } task_schedule_;
 };
 ```
 
@@ -1089,13 +1089,13 @@ StepResult Flow_Orchestrator::Task_Schedule::Step1_Tick()
         switch (stage.state())
         {
         case StageState::RawPartLoaded:
-            stage.ctx_prepare_.StartFlow();
+            stage.task_prepare_.StartFlow();
             break;
         case StageState::Prepared:
-            stage.ctx_process_.StartFlow();
+            stage.task_process_.StartFlow();
             break;
         case StageState::Machined:
-            stage.ctx_cleanup_.StartFlow();
+            stage.task_cleanup_.StartFlow();
             break;
         default:
             break;

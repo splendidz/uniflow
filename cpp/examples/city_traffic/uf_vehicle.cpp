@@ -34,8 +34,8 @@ Flow_Vehicle::Flow_Vehicle(uniflow::Runtime& rt, int id, int from, int to,
                            double dist0, uint8_t r, uint8_t g, uint8_t b)
     : uniflow::Uniflow<Flow_Vehicle>(rt)
 {
-    AddTask(ctx_);
-    ctx_.Init(id, from, to, dist0, r, g, b);
+    AddTask(task_);
+    task_.Init(id, from, to, dist0, r, g, b);
 }
 
 void Flow_Vehicle::Task_Drive::Init(int id, int from, int to, double dist0,

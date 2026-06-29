@@ -69,8 +69,8 @@ namespace Uniflow.PickAndPlaceExample
 
         public void Start()
         {
-            Viz.CtxSnapshot.StartFlow();
-            Orch.CtxSchedule.StartFlow();
+            Viz.TaskSnapshot.StartFlow();
+            Orch.TaskSchedule.StartFlow();
         }
 
         public void Shutdown()

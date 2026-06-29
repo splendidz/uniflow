@@ -193,8 +193,8 @@ class Flow_Professor(uniflow.Uniflow):
             Message(KIND_ASSIGNMENT, "project", 8, 9, 0),
             Message(KIND_ASSIGNMENT, "review", 3, 2, 0),
         ]
-        self.ctx_emit = self.Task_Emit()
-        self.AddTask(self.ctx_emit)
+        self.task_emit = self.Task_Emit()
+        self.AddTask(self.task_emit)
 
     def Emitted(self):
         return self.emitted
@@ -237,7 +237,7 @@ class Flow_Professor(uniflow.Uniflow):
             # Wake the student if it parked (cross-module launch via App).
             student = f.app.student
             if student.IsIdle():
-                student.ctx_drain.StartFlow()
+                student.task_drain.StartFlow()
             return self.Stay()
 
 
@@ -257,8 +257,8 @@ class Flow_Friend(uniflow.Uniflow):
             Message(KIND_PLAY, "board game", 0, 0, 3),
             Message(KIND_PLAY, "movie", 0, 0, 4),
         ]
-        self.ctx_emit = self.Task_Emit()
-        self.AddTask(self.ctx_emit)
+        self.task_emit = self.Task_Emit()
+        self.AddTask(self.task_emit)
 
     def Emitted(self):
         return self.emitted
@@ -300,7 +300,7 @@ class Flow_Friend(uniflow.Uniflow):
             f.ScheduleNext()
             student = f.app.student
             if student.IsIdle():
-                student.ctx_drain.StartFlow()
+                student.task_drain.StartFlow()
             return self.Stay()
 
 
@@ -329,8 +329,8 @@ class Flow_Student(uniflow.Uniflow):
         self.stress = 0
         self.hours_spent = 0
         self.done_count = 0
-        self.ctx_drain = self.Task_Drain()
-        self.AddTask(self.ctx_drain)
+        self.task_drain = self.Task_Drain()
+        self.AddTask(self.task_drain)
 
     def Ability(self):
         return self.ability
@@ -503,8 +503,8 @@ class Flow_Visualization(uniflow.Uniflow):
     def __init__(self, rt, app):
         super().__init__(rt, name="Flow_Visualization")
         self.app = app
-        self.ctx_snapshot = self.Task_Snapshot()
-        self.AddTask(self.ctx_snapshot)
+        self.task_snapshot = self.Task_Snapshot()
+        self.AddTask(self.task_snapshot)
 
     class Task_Snapshot(uniflow.Task):
         def Entry(self):
@@ -698,9 +698,9 @@ class App:
     def Start(self):
         # Phase 2: launch. The viz snapshot task and the two spawner tasks start
         # here; the student task is launched on demand by a spawner's first post.
-        self.viz.ctx_snapshot.StartFlow()
-        self.prof.ctx_emit.StartFlow()
-        self.friend_.ctx_emit.StartFlow()
+        self.viz.task_snapshot.StartFlow()
+        self.prof.task_emit.StartFlow()
+        self.friend_.task_emit.StartFlow()
 
     def Shutdown(self):
         # Set after Enter/EOF; every step checks it and returns Done().

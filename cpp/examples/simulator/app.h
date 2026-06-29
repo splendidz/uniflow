@@ -41,12 +41,12 @@ public:
     // Phase 2: launch every task. Each StartFlow() puts one task on the pump.
     void Start()
     {
-        view.ctx_draw_.StartFlow();
-        atlas.ctx_run_.StartFlow();
-        bolt.ctx_run_.StartFlow();
-        comet.ctx_run_.StartFlow();
-        dash.ctx_run_.StartFlow();
-        echo.ctx_run_.StartFlow();
+        view.task_draw_.StartFlow();
+        atlas.task_run_.StartFlow();
+        bolt.task_run_.StartFlow();
+        comet.task_run_.StartFlow();
+        dash.task_run_.StartFlow();
+        echo.task_run_.StartFlow();
     }
 
     void Shutdown()

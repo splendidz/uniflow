@@ -44,7 +44,7 @@ public:
     explicit Flow_Hello(uniflow::Runtime& rt)
         : uniflow::Uniflow<Flow_Hello>(rt, "Flow_Hello")
     {
-        AddTask(ctx_say_);
+        AddTask(task_say_);
     }
 
     // The task is public so any thread (here, main) can launch it.
@@ -58,14 +58,14 @@ public:
             std::cout << "hello from a step\n";
             return Done();
         }
-    } ctx_say_;
+    } task_say_;
 };
 
 int main()
 {
     uniflow::Runtime rt;
     Flow_Hello       hello{rt};
-    hello.ctx_say_.StartFlow();   // launch the task
+    hello.task_say_.StartFlow();   // launch the task
     hello.WaitUntilIdle();
 }
 ```
@@ -80,8 +80,8 @@ hello from a step
 
 **무슨 일이 일어났나**
 - `Runtime rt;` - 펌프 스레드 1개를 띄운다.
-- `Flow_Hello hello{rt};` - 모듈을 매다는 순간부터 펌프가 매 라운드 `hello`를 방문한다. 생성자가 `AddTask(ctx_say_)` 를 한 번 불러 태스크의 `flow()` 백포인터를 연결한다.
-- `hello.ctx_say_.StartFlow()` - 태스크의 `Entry()` step에서 flow를 무장한다. step은 다음 라운드에 실행된다.
+- `Flow_Hello hello{rt};` - 모듈을 매다는 순간부터 펌프가 매 라운드 `hello`를 방문한다. 생성자가 `AddTask(task_say_)` 를 한 번 불러 태스크의 `flow()` 백포인터를 연결한다.
+- `hello.task_say_.StartFlow()` - 태스크의 `Entry()` step에서 flow를 무장한다. step은 다음 라운드에 실행된다.
 - `Entry()` 가 `Step1_Hello()` 를 반환하고, 그것이 출력한 뒤 `Done()` 을 반환하므로 모듈은 idle 로 복귀한다.
 
 **조각 이름 정리.** *모듈*(`Flow_Hello`)은 런타임 위의 영속 객체이다. *태스크*(`Task_Say`)는 모듈이 돌릴 수 있는 한 단위 작업이다. *step*(`Step1_Hello`)은 그 태스크의 협력적 한 조각이다. step은 번호를 붙이고(`Step1_`, `Step2_`, ...) 자기 태스크의 private 멤버로 존재한다. public 인 것은 태스크뿐이며, 바깥에서 하는 일은 그것을 launch 하는 것뿐이기 때문이다.
@@ -104,7 +104,7 @@ public:
     explicit Flow_Greet(uniflow::Runtime& rt)
         : uniflow::Uniflow<Flow_Greet>(rt, "Flow_Greet")
     {
-        AddTask(ctx_greet_);
+        AddTask(task_greet_);
     }
 
     struct Task_Greet : uniflow::Task<Flow_Greet>
@@ -127,14 +127,14 @@ public:
             std::cout << "3. see you again\n";
             return Done();
         }
-    } ctx_greet_;
+    } task_greet_;
 };
 
 int main()
 {
     uniflow::Runtime rt;
     Flow_Greet       greet{rt};
-    greet.ctx_greet_.StartFlow();
+    greet.task_greet_.StartFlow();
     greet.WaitUntilIdle();
 }
 ```
@@ -167,7 +167,7 @@ public:
     explicit Flow_Counter(uniflow::Runtime& rt)
         : uniflow::Uniflow<Flow_Counter>(rt, "Flow_Counter")
     {
-        AddTask(ctx_count_);
+        AddTask(task_count_);
     }
 
     struct Task_Count : uniflow::Task<Flow_Counter>
@@ -190,14 +190,14 @@ public:
             }
             return Stay();   // not yet - come back next round
         }
-    } ctx_count_;
+    } task_count_;
 };
 
 int main()
 {
     uniflow::Runtime rt;
     Flow_Counter     counter{rt};
-    counter.ctx_count_.StartFlow();
+    counter.task_count_.StartFlow();
     counter.WaitUntilIdle();
 }
 ```
@@ -226,7 +226,7 @@ t.HeldFor(cond, 50ms);     // bool: has 'cond' been continuously true for 50ms?
 
 **보관 위치.** step을 넘나드는 타이머(step A에서 무장, step B에서 체크)는 step보다 오래 살아야 하므로 **태스크의 멤버**로 두고 `OnEnter()` 에서 재무장한다. 위 `t_` 가 이에 해당한다. 타이머가 태스크에 속하므로 모든 `Stay()` 재진입을 견디고, 다음 태스크 진입에서 리셋되며 수동 관리가 필요 없다.
 
-**내장 per-step 타이머.** 모든 모듈은 step에서 `flow().StepTimer()` 로 닿는 내장 타이머도 가진다. 태스크 진입에서 리셋되는 per-task `TaskContext::Elapsed()` 와 달리, 이건 **모든 step 전환**(`Next`, `StayUntil` 타임아웃, 태스크 전환, flow 시작)에서 재무장되지만 `Stay` 에서는 안 되므로 멤버 선언 없이 현재 step 안의 경과를 잰다. 직접 만든 멤버 타이머에 같은 auto-reset을 주려면 평범한 `UFTimer` 대신 `flow().NewAutoTimer()` 로 만들면 된다 - 모듈이 등록된 모든 타이머를 step 전환마다 재무장한다. 셀프로 리셋하는 `UFTimer` 는 영향받지 않는다.
+**내장 per-step 타이머.** 모든 모듈은 step에서 `flow().StepTimer()` 로 닿는 내장 타이머도 가진다. 태스크 진입에서 리셋되는 per-task `TaskBase::Elapsed()` 와 달리, 이건 **모든 step 전환**(`Next`, `StayUntil` 타임아웃, 태스크 전환, flow 시작)에서 재무장되지만 `Stay` 에서는 안 되므로 멤버 선언 없이 현재 step 안의 경과를 잰다. 직접 만든 멤버 타이머에 같은 auto-reset을 주려면 평범한 `UFTimer` 대신 `flow().NewAutoTimer()` 로 만들면 된다 - 모듈이 등록된 모든 타이머를 step 전환마다 재무장한다. 셀프로 리셋하는 `UFTimer` 는 영향받지 않는다.
 
 > **배속·freeze 되는 하나의 시계.** 타이머를 런타임에 바인딩하면 - `uniflow::UFTimer t{rt.clock()}` - 그 런타임의 가상 시계를 따른다. `rt.clock().SetScale(10)` 은 전체 흐름을 10배속 재생하고, `rt.clock().Freeze()` / `.Resume()` 은 모든 논리 타임아웃을 정지한다(예: e-stop 중 3초 타임아웃이 라인 멈춤 동안 터지지 않게). 그냥 `UFTimer{}` 는 실제 시간을 쓴다. async/IO 데드라인은 배속과 무관하게 항상 실제 시간이다. 챕터 10에서 다룬다.
 
@@ -291,7 +291,7 @@ public:
     explicit Flow_Ping(uniflow::Runtime& rt)
         : uniflow::Uniflow<Flow_Ping>(rt, "Flow_Ping")
     {
-        AddTask(ctx_ping_);
+        AddTask(task_ping_);
     }
 
     struct Task_Ping : uniflow::Task<Flow_Ping>
@@ -316,7 +316,7 @@ public:
             --count_;
             return Stay();
         }
-    } ctx_ping_;
+    } task_ping_;
 };
 
 class Flow_Pong : public uniflow::Uniflow<Flow_Pong>
@@ -325,7 +325,7 @@ public:
     explicit Flow_Pong(uniflow::Runtime& rt)
         : uniflow::Uniflow<Flow_Pong>(rt, "Flow_Pong")
     {
-        AddTask(ctx_pong_);
+        AddTask(task_pong_);
     }
 
     struct Task_Pong : uniflow::Task<Flow_Pong>
@@ -350,7 +350,7 @@ public:
             --count_;
             return Stay();
         }
-    } ctx_pong_;
+    } task_pong_;
 };
 
 int main()
@@ -358,8 +358,8 @@ int main()
     uniflow::Runtime rt;
     Flow_Ping        ping{rt};
     Flow_Pong        pong{rt};
-    ping.ctx_ping_.StartFlow();
-    pong.ctx_pong_.StartFlow();
+    ping.task_ping_.StartFlow();
+    pong.task_pong_.StartFlow();
     ping.WaitUntilIdle();
     pong.WaitUntilIdle();
     std::cout << shared::g_log.str();
@@ -377,7 +377,7 @@ ping pong
 
 `g_log`, `g_turn` 어디에도 mutex가 없다. 둘 다 같은 펌프 스레드 위에서만 접근되기 때문이다.
 
-**모듈 자신의 상태에 접근: `flow()`.** step은 모듈이 아니라 자기 태스크의 멤버이므로 `this` 는 태스크이다. 영속 하드웨어/피어 상태가 있는 소속 모듈은 `flow()` 로 접근한다. `flow()` 는 `AddTask` 가 연결한 typed 참조이다. 태스크가 모듈의 중첩 타입이므로 `flow()` 는 모듈의 private 멤버도 읽는다: `flow().axis_->Move(...)`, `flow().PartnerInZoneB()`. 형제 태스크의 상태도 같은 방식으로 접근한다: `flow().ctx_other_`.
+**모듈 자신의 상태에 접근: `flow()`.** step은 모듈이 아니라 자기 태스크의 멤버이므로 `this` 는 태스크이다. 영속 하드웨어/피어 상태가 있는 소속 모듈은 `flow()` 로 접근한다. `flow()` 는 `AddTask` 가 연결한 typed 참조이다. 태스크가 모듈의 중첩 타입이므로 `flow()` 는 모듈의 private 멤버도 읽는다: `flow().axis_->Move(...)`, `flow().PartnerInZoneB()`. 형제 태스크의 상태도 같은 방식으로 접근한다: `flow().task_other_`.
 
 **주의:** Runtime을 둘 만들면 펌프가 둘이 된다. 이 경우 서로 다른 Runtime의 모듈 간 공유 자원에 동기화가 필요하며, 둘을 락 없이 잇는 방법(`Post` / `Link`)은 챕터 9에서 다룬다. 보통은 Runtime 하나로 충분하다.
 
@@ -400,7 +400,7 @@ public:
     explicit Flow_Fetcher(uniflow::Runtime& rt)
         : uniflow::Uniflow<Flow_Fetcher>(rt, "Flow_Fetcher")
     {
-        AddTask(ctx_fetch_);
+        AddTask(task_fetch_);
     }
 
     struct Task_Fetch : uniflow::Task<Flow_Fetcher>
@@ -446,14 +446,14 @@ public:
             // ... real HTTP call happens here, on a pool thread ...
             return "<html>...</html>";
         }
-    } ctx_fetch_;
+    } task_fetch_;
 };
 
 int main()
 {
     uniflow::Runtime rt;
     Flow_Fetcher     fetcher{rt};
-    fetcher.ctx_fetch_.StartFlow();
+    fetcher.task_fetch_.StartFlow();
     fetcher.WaitUntilIdle();
 }
 ```
@@ -757,7 +757,7 @@ net_rt.Post([] {
 
 > 더 풍부한 로깅을 원하면 `PostAt(caller, fn)` 이 호출 위치(파일/줄/함수)를 붙여 `OnPostSubmitted` / `OnPostExecuted` 가 출처를 보고하게 한다. 맨 `Post` 는 빈 call site로 post한다.
 
-**규칙:** post된 콜백은 step/flow 밖에서 도는 raw 콜백이다(trace 없음). 그러므로 짧고 논블로킹이어야 한다. 펌프를 오래 잡으면 그 runtime 전체가 멈춘다. 블로킹 작업이 필요하면 콜백 안에서 `ctx.StartFlow()` 로 flow를 시작한다.
+**규칙:** post된 콜백은 step/flow 밖에서 도는 raw 콜백이다(trace 없음). 그러므로 짧고 논블로킹이어야 한다. 펌프를 오래 잡으면 그 runtime 전체가 멈춘다. 블로킹 작업이 필요하면 콜백 안에서 `task.StartFlow()` 로 flow를 시작한다.
 
 ### PostAndWait - 값을 받아와야 할 때
 
@@ -787,7 +787,7 @@ uniflow::Runtime sub_rt;
 Flow_Something m{sub_rt};   // module belongs to sub_rt
 rt.Link(sub_rt);           // but rt's pump drives m
 
-m.ctx_run_.StartFlow();    // runs on rt's pump
+m.task_run_.StartFlow();    // runs on rt's pump
 ```
 
 합치고 나면 `rt` 의 모듈과 `sub_rt` 의 모듈이 한 스레드에서 직렬화되므로, 둘 사이 공유 자원도 락이 필요 없다. 각 모듈의 slow 임계값 / observer / executor 는 자기 것을 그대로 쓰고, 펌프 쉬는 주기만 driver 의 `Config` 를 따른다. `LinkAt` 은 호출 위치를 잡아 `OnLinked` 에 넘긴다.
@@ -848,7 +848,7 @@ rt.clock().Resume();         // ... and continues from where it froze
 // on some I/O thread:
 void OnNetworkMessage()
 {
-    App::inst().handler.ctx_handle_.StartFlow();
+    App::inst().handler.task_handle_.StartFlow();
 }
 ```
 
@@ -879,14 +879,14 @@ net_rt.Post([&] { App::inst().handler.Enqueue(m); });   // runs on the pump, wak
 ```cpp
 if (worker.IsIdle())
 {
-    worker.ctx_run_.StartFlow();
+    worker.task_run_.StartFlow();
 }
 ```
 
 - **`WaitUntilIdle()`** - 도는 태스크가 끝날 때까지 호출 스레드를 블록한다. `main()` 이 종료 전 작업이 빠지길 기다리는 방법이다. 소유 스레드에서 부르고, step 안에서는 절대 부르지 않는다(자기 펌프를 기다리며 블록하면 데드락):
 
 ```cpp
-pipe.ctx_fetch_.StartFlow();
+pipe.task_fetch_.StartFlow();
 pipe.WaitUntilIdle();          // main thread parks here until the task ends
 ```
 
@@ -935,8 +935,8 @@ public:
     explicit Flow_Loader(uniflow::Runtime& rt)
         : uniflow::Uniflow<Flow_Loader>(rt, "Flow_Loader")
     {
-        AddTask(ctx_pick_);
-        AddTask(ctx_place_);
+        AddTask(task_pick_);
+        AddTask(task_place_);
     }
 
     // Unit: Pick - approach the source, grip, lift, then hand off to Place.
@@ -949,7 +949,7 @@ public:
         StepResult Step2_WaitAtSource();
         StepResult Step3_Grip();
         StepResult Step4_Lift();
-    } ctx_pick_;
+    } task_pick_;
 
     // Unit: Place - carry to the destination and release.
     struct Task_Place : uniflow::Task<Flow_Loader>
@@ -960,7 +960,7 @@ public:
         StepResult Step1_MoveToDest();
         StepResult Step2_WaitAtDest();
         StepResult Step3_Release();
-    } ctx_place_;
+    } task_place_;
 
 private:
     Motion* axis_;   // durable hardware, reached as flow().axis_
@@ -985,7 +985,7 @@ StepResult Flow_Loader::Task_Pick::Step4_Lift()
 {
     if (flow().axis_->AtPickHeight())
     {
-        return StartTask(flow().ctx_place_);   // Pick done -> enter Place
+        return StartTask(flow().task_place_);   // Pick done -> enter Place
     }
     return Stay();
 }
@@ -997,7 +997,7 @@ StepResult Flow_Loader::Task_Pick::Step4_Lift()
 
 1. **step의 소속이 타입에 고정된다.** `Task_Pick::Step1_MoveToSource` 는 `Task_Pick` 의 멤버이다. 어느 step 하나만 읽어도 그 단위를 알 수 있으며, 틀린 그룹으로 이름 붙일 수 없다.
 2. **단위 경계가 명시적이다.** `Task_Pick` 안에서 `Next(UF_FN(...))` 는 다른 `Task_Pick` step만 가리킬 수 있다. `UF_FN` 이 이름을 현재 태스크 타입에 대해 해석하기 때문이다. `Task_Place` step을 가리키면 타입 불일치이며 컴파일되지 않는다. 단위를 나가는 유일한 길은 `StartTask` 이며, 그래서 flow가 한 동작에서 다음으로 소리 없이 흘러내릴 수 없다.
-3. **진입은 계약이다.** `StartTask(flow().ctx_place_)` 는 `Task_Place::Entry()` 에만 안착한다. 단위의 내부 step은 private이라 밖에서 진입할 수 없으므로, 호출부를 하나도 건드리지 않고 단위 내부를 재배치할 수 있다.
+3. **진입은 계약이다.** `StartTask(flow().task_place_)` 는 `Task_Place::Entry()` 에만 안착한다. 단위의 내부 step은 private이라 밖에서 진입할 수 없으므로, 호출부를 하나도 건드리지 않고 단위 내부를 재배치할 수 있다.
 
 ### 단위를 순서대로 잇는 두 방법
 
@@ -1021,7 +1021,7 @@ private:
     StepResult Step1_SendStart();
     StepResult Step2_WaitReady();
     StepResult Step_Timeout();
-} ctx_prepare_;
+} task_prepare_;
 ```
 
 ```cpp
@@ -1058,7 +1058,7 @@ public:
     explicit Flow_Orchestrator(uniflow::Runtime& rt)
         : uniflow::Uniflow<Flow_Orchestrator>(rt, "Flow_Orchestrator")
     {
-        AddTask(ctx_schedule_);
+        AddTask(task_schedule_);
     }
 
     struct Task_Schedule : uniflow::Task<Flow_Orchestrator>
@@ -1067,7 +1067,7 @@ public:
 
     private:
         StepResult Step1_Tick();
-    } ctx_schedule_;
+    } task_schedule_;
 };
 ```
 
@@ -1089,13 +1089,13 @@ StepResult Flow_Orchestrator::Task_Schedule::Step1_Tick()
         switch (stage.state())
         {
         case StageState::RawPartLoaded:
-            stage.ctx_prepare_.StartFlow();
+            stage.task_prepare_.StartFlow();
             break;
         case StageState::Prepared:
-            stage.ctx_process_.StartFlow();
+            stage.task_process_.StartFlow();
             break;
         case StageState::Machined:
-            stage.ctx_cleanup_.StartFlow();
+            stage.task_cleanup_.StartFlow();
             break;
         default:
             break;

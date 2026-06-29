@@ -17,7 +17,7 @@ public:
     explicit Flow_Visualization(uniflow::Runtime& rt);
 
     // The single perpetual Snapshot task (public so app.Start() launches it with
-    // ctx.StartFlow()). Its one step copies line state into g_snap every tick
+    // task.StartFlow()). Its one step copies line state into g_snap every tick
     // (perpetual poll; ends only on Stop).
     struct Task_Snapshot : uniflow::Task<Flow_Visualization>
     {
@@ -25,7 +25,7 @@ public:
 
     private:
         StepResult Step1_Tick();
-    } ctx_snapshot_;
+    } task_snapshot_;
 };
 
 // True when the console back-end should be used (always off Windows; on Windows

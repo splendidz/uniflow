@@ -9,7 +9,7 @@
 //
 // CURRENT API: a flow is a class deriving from uniflow::Uniflow<Flow_Writer>;
 // its one Task (Task_Write) owns the steps. AddTask wires the task in the ctor;
-// App launches it with module.ctx_write_.StartFlow().
+// App launches it with module.task_write_.StartFlow().
 #pragma once
 
 #include "uniflow.hpp"
@@ -26,7 +26,7 @@ public:
 
     int Remaining() const { return remaining_; }
 
-    // The flow's single task. Public so App launches it with ctx_write_.StartFlow().
+    // The flow's single task. Public so App launches it with task_write_.StartFlow().
     struct Task_Write : uniflow::Task<Flow_Writer>
     {
         StepResult Entry() override { return Step1_Begin(); }
@@ -34,7 +34,7 @@ public:
     private:
         StepResult Step1_Begin();   // announce the work
         StepResult Step2_Loop();    // append on our turn, else Stay until it
-    } ctx_write_;
+    } task_write_;
 
 private:
     // Flow state, reached from steps via flow().member_.

@@ -17,7 +17,7 @@ public:
     explicit Flow_Visualization(uniflow::Runtime& rt)
         : uniflow::Uniflow<Flow_Visualization>(rt)
     {
-        AddTask(ctx_);
+        AddTask(task_);
     }
 
     // The single perpetual Snapshot task: copy World -> g_snap every tick.
@@ -27,7 +27,7 @@ public:
 
     private:
         StepResult Step_Tick();
-    } ctx_;
+    } task_;
 };
 
 // True when the console back-end should be used (always off Windows; on Windows

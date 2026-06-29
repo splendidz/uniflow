@@ -37,7 +37,7 @@ This example is C++ only and Windows oriented: it uses WinHTTP and a console.
 - `http_client.h` / `http_client.cpp` - WinHTTP wrapper (GET + Gemini POST),
   a JSON escaper, and a forgiving Gemini response/error parser.
 - `app.h` - the `Runtime` plus the one module; `Start()` launches the task with
-  `weather.ctx_fetch_.StartFlow()`.
+  `weather.task_fetch_.StartFlow()`.
 - `main.cpp` - UTF-8 console setup (`SetConsoleOutputCP(CP_UTF8)`) and the
   start/shutdown bracket.
 

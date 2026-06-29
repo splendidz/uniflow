@@ -69,5 +69,5 @@ public:
         uint8_t            r_ = 0, g_ = 0, b_ = 0;
         uniflow::TimePoint last_{};
         std::mt19937       rng_;
-    } ctx_;
+    } task_;
 };

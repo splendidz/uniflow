@@ -26,7 +26,7 @@ using namespace std::chrono_literals;
 Flow_Visualization::Flow_Visualization(uniflow::Runtime& rt)
     : uniflow::Uniflow<Flow_Visualization>(rt, "Flow_Visualization")
 {
-    AddTask(ctx_snapshot_);
+    AddTask(task_snapshot_);
 }
 
 // Pump-side: copy live sender / receiver / mailbox state into g_snap under

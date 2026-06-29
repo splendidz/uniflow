@@ -24,7 +24,7 @@ public:
     private:
         StepResult Step1_Arm();
         StepResult Step2_Tick();
-    } ctx_emit_;
+    } task_emit_;
 
 private:
     void ScheduleNext();

@@ -5,7 +5,7 @@
 //
 // FEATURE FOCUS: park / relaunch wake. When the queue empties the receiver
 // returns Done() and its module PARKS (goes idle). The sender, on its next
-// burst, sees recv.IsIdle and relaunches the drain task with CtxDrain.StartFlow()
+// burst, sees recv.IsIdle and relaunches the drain task with TaskDrain.StartFlow()
 // - the classic IsIdle + StartFlow wake pattern. Both calls happen inline on the
 // same pump thread, so they are plain in-thread calls: no lock, no signal.
 using System;
@@ -33,13 +33,13 @@ namespace Uniflow.Examples.QueueDrain
         // The receiver, wired by the App after construction (relaunch target).
         public Flow_Receiver? Recv;
 
-        public readonly Task_Emit CtxEmit;
+        public readonly Task_Emit TaskEmit;
 
         public Flow_Sender(Runtime rt) : base(rt, "Flow_Sender")
         {
             FillVectors();
-            CtxEmit = new Task_Emit();
-            AddTask(CtxEmit);
+            TaskEmit = new Task_Emit();
+            AddTask(TaskEmit);
         }
 
         private void FillVectors()
@@ -113,7 +113,7 @@ namespace Uniflow.Examples.QueueDrain
                 // and StartFlow are plain in-thread calls - no lock, no signal.
                 if (Flow.Recv!.IsIdle)
                 {
-                    Flow.Recv!.CtxDrain.StartFlow();
+                    Flow.Recv!.TaskDrain.StartFlow();
                 }
 
                 return Stay();
@@ -135,12 +135,12 @@ namespace Uniflow.Examples.QueueDrain
         public int Processed;
         public string LastResult = "";
 
-        public readonly Task_Drain CtxDrain;
+        public readonly Task_Drain TaskDrain;
 
         public Flow_Receiver(Runtime rt) : base(rt, "Flow_Receiver")
         {
-            CtxDrain = new Task_Drain();
-            AddTask(CtxDrain);
+            TaskDrain = new Task_Drain();
+            AddTask(TaskDrain);
         }
 
         public sealed class Task_Drain : Task<Flow_Receiver>
@@ -210,12 +210,12 @@ namespace Uniflow.Examples.QueueDrain
         public Flow_Sender? Send;
         public Flow_Receiver? Recv;
 
-        public readonly Task_Snapshot CtxSnapshot;
+        public readonly Task_Snapshot TaskSnapshot;
 
         public Flow_Visualization(Runtime rt) : base(rt, "Flow_Visualization")
         {
-            CtxSnapshot = new Task_Snapshot();
-            AddTask(CtxSnapshot);
+            TaskSnapshot = new Task_Snapshot();
+            AddTask(TaskSnapshot);
         }
 
         public sealed class Task_Snapshot : Task<Flow_Visualization>

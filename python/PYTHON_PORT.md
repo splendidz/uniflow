@@ -32,7 +32,7 @@ Core concepts (identical to the C++ edition):
 |---|---|
 | `Uniflow` | the **module** base. `__init__(rt, *, name=None)` (`name` is keyword-only). Owns the async slots, the built-in `self.uf_timer`, and the running-flow position |
 | ↳ task binding | `AddTask(task)` (wire `task.flow()` back to this module; starts nothing), `StartTask(task) -> StartResult` (launch this module at `task.Entry()`; callable from any thread) |
-| ↳ introspection | `IsIdle` (free?), `WaitUntilIdle(timeout=None)` (block until *this* module is idle), `InstanceName()`, `CurrentStepName()` / `CurrentStepOrdinal()` / `CurrentStepDescription()` (live "where is the flow now?"; `""` / `-1` when idle), `Cancel()` (end the running flow as Fail, reason `"cancelled"`), `Describe(*parts)` |
+| ↳ introspection | `IsIdle` (free?), `WaitUntilIdle(timeout=None)` (block until *this* module is idle), `InstanceName()`, `CurrentTaskName()` / `CurrentStepName()` / `CurrentStepOrdinal()` / `CurrentStepDescription()` (live "which task / where is the flow now?"; `""` / `-1` when idle; `task.Name()` gives the same class name from a task handle), `Cancel()` (end the running flow as Fail, reason `"cancelled"`), `Describe(*parts)` |
 | `Task` | the **task** base (commonly nested in the module). Subclass it, define step methods, override `Entry()` (name the first step) and optionally `OnEnter()` (re-arm per-task state on entry) |
 | ↳ reach the module | `self.flow()` -> the owning `Uniflow` (wired by `AddTask`), e.g. `self.flow().some_attr` |
 | ↳ step intents | `Stay()`, `StayTimeout(timeout_sec, timeout_step, *args, **kwargs)` (keep polling the current step, but route to `timeout_step` once `timeout_sec` of logical time passes since step entry = a step-level catch; the body owns the success path), `StayUntil(condition, settle_sec, success, timeout_sec, timeout_step)` (the same with a folded wait condition: poll `condition`, once held for `settle_sec` go to `success`, else on timeout go to `timeout_step`), `Next(fn, *args, **kwargs)` (advance to a sibling step, passing args), `Done()`, `Fail(reason="")`, `Describe(*parts)` (one-line "what am I doing" for logs; shown on the next transition then cleared) |
@@ -69,8 +69,8 @@ import uniflow
 class Flow_Router(uniflow.Uniflow):
     def __init__(self, rt):
         super().__init__(rt, name="Flow_Router")
-        self.ctx = self.Task_Route()
-        self.AddTask(self.ctx)
+        self.task = self.Task_Route()
+        self.AddTask(self.task)
 
     class Task_Route(uniflow.Task):
         def Entry(self):                 # flow entry: name the first step
@@ -85,7 +85,7 @@ class Flow_Router(uniflow.Uniflow):
 
 rt = uniflow.Runtime()
 r = Flow_Router(rt)
-r.ctx.StartFlow()
+r.task.StartFlow()
 rt.WaitUntilIdle()
 ```
 

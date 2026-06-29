@@ -96,7 +96,7 @@ public:
     explicit Flow_Example(uniflow::Runtime& rt)
         : uniflow::Uniflow<Flow_Example>(rt, "Example")
     {
-        AddTask(ctx_);                 // wire the task to the flow (one line, once per task)
+        AddTask(task_);                 // wire the task to the flow (one line, once per task)
     }
 
     // task = a unit of work. It owns its own step member functions. public, so it can be entered from outside.
@@ -108,7 +108,7 @@ public:
         StepResult Step1_Begin();
         StepResult Step2_Work();
         StepResult Step3_Done();
-    } ctx_;
+    } task_;
 
 private:
     bool ready_ = true;                // the flow holds the state; steps read it via flow()
@@ -136,7 +136,7 @@ int main()
     uniflow::Runtime rt;               // spins up one pump thread
     Flow_Example     flow{rt};
 
-    flow.ctx_.StartFlow();             // callable from any thread
+    flow.task_.StartFlow();             // callable from any thread
     flow.WaitUntilIdle();
 }
 ```
@@ -155,8 +155,8 @@ class Flow_Example(uniflow.Uniflow):
     def __init__(self, rt):
         super().__init__(rt, name="Example")
         self.ready = True              # the flow holds the state; steps read it via flow()
-        self.ctx = self.MyTask()
-        self.AddTask(self.ctx)         # wire the task to the flow (one line, once per task)
+        self.task = self.MyTask()
+        self.AddTask(self.task)         # wire the task to the flow (one line, once per task)
 
     # task = a unit of work. It owns its own step methods.
     class MyTask(uniflow.Task):
@@ -180,7 +180,7 @@ def main():
     rt = uniflow.Runtime()             # spins up one pump thread
     flow = Flow_Example(rt)
 
-    flow.ctx.StartFlow()               # callable from any thread
+    flow.task.StartFlow()               # callable from any thread
     flow.WaitUntilIdle()
     rt.stop()
 
@@ -201,12 +201,12 @@ using Uniflow;
 sealed class Flow_Example : Module
 {
     public bool Ready = true;          // the flow holds the state; steps read it via Flow
-    public readonly MyTask Ctx;
+    public readonly MyTask TaskT;
 
     public Flow_Example(Runtime rt) : base(rt, "Example")
     {
-        Ctx = new MyTask();
-        AddTask(Ctx);                  // wire the task to the flow (one line, once per task)
+        TaskT = new MyTask();
+        AddTask(TaskT);                  // wire the task to the flow (one line, once per task)
     }
 
     // task = a unit of work. It owns its own step methods.
@@ -240,7 +240,7 @@ static class Program
         using var rt = new Runtime();              // spins up one pump thread
         var flow = new Flow_Example(rt);
 
-        flow.Ctx.StartFlow();                      // callable from any thread
+        flow.TaskT.StartFlow();                      // callable from any thread
         flow.WaitUntilIdle();
     }
 }
@@ -340,8 +340,8 @@ Flow_Conveyor conveyor{rt};     // Conveyor task set
 Flow_Gripper  gripper{rt};      // Gripper task set
 
 // four modules progress concurrently on one thread - no mutex
-x_axis.ctx_home_.StartFlow();
-conveyor.ctx_run_.StartFlow();
+x_axis.task_home_.StartFlow();
+conveyor.task_run_.StartFlow();
 ```
 
 Modules on the same `Runtime` share the single-thread invariant, so accessing state between modules needs no mutex. Even in a round where the X axis is `Stay()` polling, the conveyor's stages advance.
@@ -360,8 +360,8 @@ Below is a concrete example showing two axes actually moving at the same time. T
 //   t1.join(); t2.join();
 //
 // the uniflow way (one thread):
-//   x_axis.ctx_home_.StartFlow();
-//   y_axis.ctx_home_.StartFlow();
+//   x_axis.task_home_.StartFlow();
+//   y_axis.task_home_.StartFlow();
 //   rt.WaitAll();
 
 // -- Flow_XAxis ---------------------------------
@@ -370,7 +370,7 @@ class Flow_XAxis : public uniflow::Uniflow<Flow_XAxis>
 public:
     Flow_XAxis(uniflow::Runtime& rt) : uniflow::Uniflow<Flow_XAxis>(rt, "XAxis")
     {
-        AddTask(ctx_home_);
+        AddTask(task_home_);
     }
 
     struct Task_Home : uniflow::Task<Flow_XAxis>
@@ -388,7 +388,7 @@ public:
                 return Stay();                  // still moving - this round ends here
             return Done();                      // complete
         }
-    } ctx_home_;
+    } task_home_;
 
 private:
     Motor motor_;
@@ -401,8 +401,8 @@ uniflow::Runtime rt;
 Flow_XAxis x_axis{rt};
 Flow_YAxis y_axis{rt};
 
-x_axis.ctx_home_.StartFlow();   // start homing X
-y_axis.ctx_home_.StartFlow();   // start homing Y (at the same time)
+x_axis.task_home_.StartFlow();   // start homing X
+y_axis.task_home_.StartFlow();   // start homing Y (at the same time)
 
 // each pump round:
 //   Round 1: X.Step1(cmd move) -> Next  |  Y.Step1(cmd move) -> Next
@@ -431,8 +431,8 @@ y_axis.WaitUntilIdle();
 #   t1.start(); t2.start(); t1.join(); t2.join()
 #
 # the uniflow way (one thread):
-#   x_axis.ctx_home.StartFlow()
-#   y_axis.ctx_home.StartFlow()
+#   x_axis.task_home.StartFlow()
+#   y_axis.task_home.StartFlow()
 #   rt.WaitUntilIdle()
 
 # -- Flow_XAxis ---------------------------------
@@ -440,8 +440,8 @@ class Flow_XAxis(uniflow.Uniflow):
     def __init__(self, rt):
         super().__init__(rt, name="XAxis")
         self.motor = Motor()
-        self.ctx_home = self.Task_Home()
-        self.AddTask(self.ctx_home)
+        self.task_home = self.Task_Home()
+        self.AddTask(self.task_home)
 
     class Task_Home(uniflow.Task):
         def Entry(self):
@@ -464,8 +464,8 @@ rt = uniflow.Runtime()
 x_axis = Flow_XAxis(rt)
 y_axis = Flow_YAxis(rt)
 
-x_axis.ctx_home.StartFlow()   # start homing X
-y_axis.ctx_home.StartFlow()   # start homing Y (at the same time)
+x_axis.task_home.StartFlow()   # start homing X
+y_axis.task_home.StartFlow()   # start homing Y (at the same time)
 
 # each pump round:
 #   Round 1: X.Step1(cmd move) -> Next  |  Y.Step1(cmd move) -> Next
@@ -493,20 +493,20 @@ y_axis.WaitUntilIdle()
 //   t1.Start(); t2.Start(); t1.Join(); t2.Join();
 //
 // the uniflow way (one thread):
-//   xAxis.CtxHome.StartFlow();
-//   yAxis.CtxHome.StartFlow();
+//   xAxis.TaskHome.StartFlow();
+//   yAxis.TaskHome.StartFlow();
 //   rt.WaitUntilIdle();
 
 // -- Flow_XAxis ---------------------------------
 sealed class Flow_XAxis : Module
 {
     public readonly Motor Motor = new Motor();
-    public readonly Task_Home CtxHome;
+    public readonly Task_Home TaskHome;
 
     public Flow_XAxis(Runtime rt) : base(rt, "XAxis")
     {
-        CtxHome = new Task_Home();
-        AddTask(CtxHome);
+        TaskHome = new Task_Home();
+        AddTask(TaskHome);
     }
 
     public sealed class Task_Home : Task<Flow_XAxis>
@@ -535,8 +535,8 @@ using var rt = new Runtime();
 var xAxis = new Flow_XAxis(rt);
 var yAxis = new Flow_YAxis(rt);
 
-xAxis.CtxHome.StartFlow();   // start homing X
-yAxis.CtxHome.StartFlow();   // start homing Y (at the same time)
+xAxis.TaskHome.StartFlow();   // start homing X
+yAxis.TaskHome.StartFlow();   // start homing Y (at the same time)
 
 // each pump round:
 //   Round 1: X.Step1(cmd move) -> Next  |  Y.Step1(cmd move) -> Next
@@ -726,11 +726,11 @@ public:
     explicit Flow_PickPlace(uniflow::Runtime& rt)
         : uniflow::Uniflow<Flow_PickPlace>(rt, "PickPlace")
     {
-        AddTask(ctx_pick_);
-        AddTask(ctx_place_);
+        AddTask(task_pick_);
+        AddTask(task_place_);
     }
 
-    // public - the orchestrator enters the desired unit directly via ctx.StartFlow()
+    // public - the orchestrator enters the desired unit directly via task.StartFlow()
     struct Task_Pick : uniflow::Task<Flow_PickPlace>
     {
         int part_id = 0;                               // state shared by the steps within the task
@@ -746,10 +746,10 @@ public:
         StepResult Step2_WaitAtSource()
         {
             if (!flow().arm_.IsReady()) return Stay();
-            flow().ctx_place_.slot = flow().dest_.FreeSlot();
-            return StartTask(flow().ctx_place_);       // switch to Task_Place
+            flow().task_place_.slot = flow().dest_.FreeSlot();
+            return StartTask(flow().task_place_);       // switch to Task_Place
         }
-    } ctx_pick_;
+    } task_pick_;
 
     struct Task_Place : uniflow::Task<Flow_PickPlace>
     {
@@ -764,7 +764,7 @@ public:
         }
 
         StepResult Step2_Release() { flow().arm_.Release(); return Done(); }
-    } ctx_place_;
+    } task_place_;
 };
 ```
 
@@ -777,12 +777,12 @@ public:
 class Flow_PickPlace(uniflow.Uniflow):
     def __init__(self, rt):
         super().__init__(rt, name="PickPlace")
-        self.ctx_pick = self.Task_Pick()
-        self.AddTask(self.ctx_pick)
-        self.ctx_place = self.Task_Place()
-        self.AddTask(self.ctx_place)
+        self.task_pick = self.Task_Pick()
+        self.AddTask(self.task_pick)
+        self.task_place = self.Task_Place()
+        self.AddTask(self.task_place)
 
-    # public - the orchestrator enters the desired unit directly via ctx.StartFlow()
+    # public - the orchestrator enters the desired unit directly via task.StartFlow()
     class Task_Pick(uniflow.Task):
         def __init__(self):
             super().__init__()
@@ -798,8 +798,8 @@ class Flow_PickPlace(uniflow.Uniflow):
         def Step2_WaitAtSource(self):
             if not self.flow().arm.IsReady():
                 return self.Stay()
-            self.flow().ctx_place.slot = self.flow().dest.FreeSlot()
-            return self.StartTask(self.flow().ctx_place)   # switch to Task_Place
+            self.flow().task_place.slot = self.flow().dest.FreeSlot()
+            return self.StartTask(self.flow().task_place)   # switch to Task_Place
 
     class Task_Place(uniflow.Task):
         def __init__(self):
@@ -826,18 +826,18 @@ class Flow_PickPlace(uniflow.Uniflow):
 ```csharp
 sealed class Flow_PickPlace : Module
 {
-    public readonly Task_Pick CtxPick;
-    public readonly Task_Place CtxPlace;
+    public readonly Task_Pick TaskPick;
+    public readonly Task_Place TaskPlace;
 
     public Flow_PickPlace(Runtime rt) : base(rt, "PickPlace")
     {
-        CtxPick = new Task_Pick();
-        AddTask(CtxPick);
-        CtxPlace = new Task_Place();
-        AddTask(CtxPlace);
+        TaskPick = new Task_Pick();
+        AddTask(TaskPick);
+        TaskPlace = new Task_Place();
+        AddTask(TaskPlace);
     }
 
-    // public - the orchestrator enters the desired unit directly via Ctx.StartFlow()
+    // public - the orchestrator enters the desired unit directly via TaskT.StartFlow()
     public sealed class Task_Pick : Task<Flow_PickPlace>
     {
         public int PartId;                                 // state shared by the steps in the task
@@ -852,7 +852,7 @@ sealed class Flow_PickPlace : Module
         StepResult Step2_WaitAtSource()
         {
             if (!Flow.Arm.IsReady()) return Stay();
-            Flow.CtxPlace.Slot = Flow.Dest.FreeSlot();
+            Flow.TaskPlace.Slot = Flow.Dest.FreeSlot();
             // In C#, StartTask returns StartResult (not StepResult), so a step cannot
             // "return StartTask(...)". Finish this task and let the orchestrator launch
             // Task_Place via StartFlow() the way the pick_and_place example does.
@@ -880,8 +880,8 @@ sealed class Flow_PickPlace : Module
 }
 
 // orchestrate Pick -> Place: Pick finishes, then the orchestrator launches Place.
-//   flow.CtxPick.StartFlow();  flow.WaitUntilIdle();
-//   flow.CtxPlace.StartFlow(); flow.WaitUntilIdle();
+//   flow.TaskPick.StartFlow();  flow.WaitUntilIdle();
+//   flow.TaskPlace.StartFlow(); flow.WaitUntilIdle();
 ```
 
 </details>

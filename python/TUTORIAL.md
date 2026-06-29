@@ -28,8 +28,8 @@ import uniflow
 class Flow_Hello(uniflow.Uniflow):
     def __init__(self, rt):
         super().__init__(rt, name="Flow_Hello")
-        self.ctx = self.Task_Hello()      # the module's one task
-        self.AddTask(self.ctx)            # wire flow() back-pointer; starts nothing
+        self.task = self.Task_Hello()      # the module's one task
+        self.AddTask(self.task)            # wire flow() back-pointer; starts nothing
 
     class Task_Hello(uniflow.Task):
         def Entry(self):                  # name the first step
@@ -41,15 +41,15 @@ class Flow_Hello(uniflow.Uniflow):
 
 rt = uniflow.Runtime()
 h = Flow_Hello(rt)
-h.ctx.StartFlow()             # launch the task; the first step runs next round
+h.task.StartFlow()             # launch the task; the first step runs next round
 rt.WaitUntilIdle()            # block until every module is idle
 rt.stop()
 ```
 
 - `uniflow.Runtime()` spins up one pump thread.
 - `Flow_Hello(rt)` attaches the module; the pump visits it every round.
-- `AddTask(self.ctx)` binds the task so its steps can reach the module via `self.flow()`.
-- `h.ctx.StartFlow()` launches the task; its `Entry()` runs on the next round. It returns `StartResult.Ok`, or `StartResult.Busy` if a task is already running on this module.
+- `AddTask(self.task)` binds the task so its steps can reach the module via `self.flow()`.
+- `h.task.StartFlow()` launches the task; its `Entry()` runs on the next round. It returns `StartResult.Ok`, or `StartResult.Busy` if a task is already running on this module.
 - Returning `self.Done()` sends the module back to idle.
 
 > Never call a blocking `time.sleep(...)` inside a step body - it freezes the whole pump. Use `Stay()` (Chapter 3) or `SubmitAsync` (Chapter 5).
@@ -66,8 +66,8 @@ import uniflow
 class Flow_Greet(uniflow.Uniflow):
     def __init__(self, rt):
         super().__init__(rt, name="Flow_Greet")
-        self.ctx = self.Task_Greet()
-        self.AddTask(self.ctx)
+        self.task = self.Task_Greet()
+        self.AddTask(self.task)
 
     class Task_Greet(uniflow.Task):
         def Entry(self):
@@ -87,7 +87,7 @@ class Flow_Greet(uniflow.Uniflow):
 
 rt = uniflow.Runtime()
 g = Flow_Greet(rt)
-g.ctx.StartFlow()
+g.task.StartFlow()
 rt.WaitUntilIdle(); rt.stop()
 ```
 
@@ -112,8 +112,8 @@ def hardware_ready():
 class Flow_WaitReady(uniflow.Uniflow):
     def __init__(self, rt):
         super().__init__(rt, name="Flow_WaitReady")
-        self.ctx = self.Task_Wait()
-        self.AddTask(self.ctx)
+        self.task = self.Task_Wait()
+        self.AddTask(self.task)
 
     class Task_Wait(uniflow.Task):
         def OnEnter(self):
@@ -170,8 +170,8 @@ class Flow_Writer(uniflow.Uniflow):
         self.text = text
         self.remaining = count
         self.turn_id = turn_id        # 0 or 1; write only when it is our turn
-        self.ctx = self.Task_Write()
-        self.AddTask(self.ctx)
+        self.task = self.Task_Write()
+        self.AddTask(self.task)
 
     class Task_Write(uniflow.Task):
         def Entry(self):
@@ -191,7 +191,7 @@ class Flow_Writer(uniflow.Uniflow):
 rt = uniflow.Runtime(observer=uniflow.Observer())     # silent observer
 hello = Flow_Writer(rt, "Hello ", 3, 0)
 world = Flow_Writer(rt, "World. ", 3, 1)
-hello.ctx.StartFlow(); world.ctx.StartFlow()
+hello.task.StartFlow(); world.task.StartFlow()
 hello.WaitUntilIdle(); world.WaitUntilIdle(); rt.stop()
 print("".join(SharedState.log))    # Hello World. Hello World. Hello World.
 ```
@@ -217,8 +217,8 @@ def slow_square(n):
 class Flow_Worker(uniflow.Uniflow):
     def __init__(self, rt):
         super().__init__(rt, name="Flow_Worker")
-        self.ctx = self.Task_Work()
-        self.AddTask(self.ctx)
+        self.task = self.Task_Work()
+        self.AddTask(self.task)
 
     class Task_Work(uniflow.Task):
         def Entry(self):
@@ -270,8 +270,8 @@ class Flow_Move(uniflow.Uniflow):
         self.axis = axis
         self.target = target_mm
         self.tries = 0
-        self.ctx = self.Task_Move()
-        self.AddTask(self.ctx)
+        self.task = self.Task_Move()
+        self.AddTask(self.task)
 
     class Task_Move(uniflow.Task):
         def Entry(self):
@@ -372,7 +372,7 @@ A task is usually launched by something that is *not* the pump - an event thread
 # from any thread: launching a task is safe and wakes the pump immediately.
 def on_message(msg):
     handler.current = msg
-    handler.ctx.StartFlow()        # Ok if launched, Busy if one is already running
+    handler.task.StartFlow()        # Ok if launched, Busy if one is already running
 
 # you can also nudge the pump after touching state through your own channel:
 rt.Wake()
@@ -381,7 +381,7 @@ rt.Wake()
 An **orchestrator** drives this pattern at line scale: one perpetual task whose single step checks every module's `IsIdle()` each round and launches that module's next task from plain member reads - the worker modules never sequence themselves. That is the shape of `pick_and_place.py`.
 
 Lifecycle control:
-- `module.IsIdle` - is it free? An orchestrator checks this before launching a peer's next task. (`CurrentStepName()` / `CurrentStepOrdinal()` / `CurrentStepDescription()` report where a running flow is; `""` / `-1` when idle.)
+- `module.IsIdle` - is it free? An orchestrator checks this before launching a peer's next task. (`CurrentTaskName()` / `CurrentStepName()` / `CurrentStepOrdinal()` / `CurrentStepDescription()` report which task is running and where the flow is; `""` / `-1` when idle. `task.Name()` is the same class name from a task handle.)
 - `module.WaitUntilIdle(timeout=None)` - block the calling thread until *this* module is idle.
 - `rt.WaitUntilIdle(timeout=None)` - block until *every* module is idle (how `main` waits before exit). Never call either from inside a step.
 - `module.Cancel()` - cooperatively end a running flow (it is marked failed with reason `"cancelled"`); `rt.CancelAll()` does it for all.

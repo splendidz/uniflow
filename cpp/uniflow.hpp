@@ -13,7 +13,7 @@
 // public so a peer can launch it. A step is a member of its task, so it names
 // no context - it reaches sibling state directly and the parent flow through
 // flow(). Each task designates its first step by overriding Entry(); a task is
-// launched from ANY thread with ctx.StartFlow() (or module.StartTask(ctx)),
+// launched from ANY thread with task.StartFlow() (or module.StartTask(task)),
 // returning StartResult (Ok / Busy). A module runs one task at a time. Steps
 // within a task advance with Next(UF_FN(fn)); crossing to another task is
 // StartTask(other) - Next never leaves the current task.
@@ -1599,16 +1599,16 @@ struct StepResult
 // A unit operation ("task") groups several steps that share state. The user
 // declares it as a struct deriving from uniflow::Task<Flow> (defined below,
 // after Uniflow) - which OWNS that shared state AND the step member functions -
-// and holds ONE instance on the flow. TaskContext is the non-template base of
+// and holds ONE instance on the flow. TaskBase is the non-template base of
 // Task<Flow> that carries the framework bookkeeping every task gets for free:
 // the task name (Name()), the wall time since the task was entered (Elapsed()),
 // and the ordered list of steps visited within the task (Trajectory()). OnEnter
 // is called once each time the task is entered, before its first step - reset
 // per-task members there.
-class TaskContext
+class TaskBase
 {
 public:
-    virtual ~TaskContext() = default;
+    virtual ~TaskBase() = default;
 
     // One finished step within the unit: which step, how long it held (wall
     // time from entry to transition, summed over its Stay re-entries), and how
@@ -1633,11 +1633,19 @@ public:
     // trajectory, then runs the user OnEnter.
     void uf_enter_unit_()
     {
-        if (uf_name_.empty())
-            uf_name_ = uf_short_type_(typeid(*this).name());
+        uf_ensure_name_();
         uf_timer_.Restart();
         uf_trajectory_.clear();
         OnEnter();
+    }
+    // Cache the demangled task name (normally done on entry); lets the module
+    // answer CurrentTaskName() the instant a task is armed, before its first
+    // pump round runs uf_enter_unit_.
+    const std::string& uf_ensure_name_()
+    {
+        if (uf_name_.empty())
+            uf_name_ = uf_short_type_(typeid(*this).name());
+        return uf_name_;
     }
     // Called once when a step OF THIS TASK transitions away, with its totals.
     void uf_record_step_(const char* name, double ms, int ticks)
@@ -1708,51 +1716,51 @@ public:
 
     // Bind a task to this flow. Call once per task from the module constructor
     // (typically one line per task). It wires the task's flow() back-pointer so
-    // the task's steps can reach this flow and so ctx.StartFlow() knows which
+    // the task's steps can reach this flow and so task.StartFlow() knows which
     // module to launch. Does NOT start anything.
     //
-    //   AddTask(ctx_pick_);
-    //   AddTask(ctx_place_);
-    template <class Ctx>
-    void AddTask(Ctx& ctx)
+    //   AddTask(task_pick_);
+    //   AddTask(task_place_);
+    template <class TaskT>
+    void AddTask(TaskT& task)
     {
-        static_assert(std::is_base_of_v<TaskContext, Ctx>,
-                      "AddTask: ctx must derive from uniflow::Task<Flow>");
-        ctx.uf_bind_(static_cast<Derived*>(this));
+        static_assert(std::is_base_of_v<TaskBase, TaskT>,
+                      "AddTask: task must derive from uniflow::Task<Flow>");
+        task.uf_bind_(static_cast<Derived*>(this));
     }
 
-    // Run a task: launch this module's flow at 'ctx's Entry() step. Callable
+    // Run a task: launch this module's flow at 'task's Entry() step. Callable
     // from ANY thread - a peer, an event thread, the orchestrator - the arm is
-    // serialised against the pump. Equivalent to ctx.StartFlow(). A module runs
+    // serialised against the pump. Equivalent to task.StartFlow(). A module runs
     // one task at a time, so:
     //   - StartResult::Ok   - the task was launched.
     //   - StartResult::Busy - a task is already running; nothing happened.
     //                         (Poll IsIdle() and retry, the usual pattern.)
-    template <class Ctx>
-    StartResult StartTask(Ctx& ctx)
+    template <class TaskT>
+    StartResult StartTask(TaskT& task)
     {
-        static_assert(std::is_base_of_v<TaskContext, Ctx>,
-                      "StartTask: ctx must derive from uniflow::Task<Flow>");
-        return arm_flow_(&ctx) ? StartResult::Ok : StartResult::Busy;
+        static_assert(std::is_base_of_v<TaskBase, TaskT>,
+                      "StartTask: task must derive from uniflow::Task<Flow>");
+        return arm_flow_(&task) ? StartResult::Ok : StartResult::Busy;
     }
 
 private:
-    // Shared flow-arm: install 'ctx's Entry() as the first step and reset all
+    // Shared flow-arm: install 'task's Entry() as the first step and reset all
     // per-flow accounting. Returns false (no-op) if a task is already running.
     // The entry thunk enters the unit (OnEnter) on the PUMP thread, not here -
     // arm may be called from any thread.
-    template <class Ctx>
-    bool arm_flow_(Ctx* ctx)
+    template <class TaskT>
+    bool arm_flow_(TaskT* task)
     {
         std::lock_guard<std::mutex> lk(op_mu_);
         if (flow_running_)
             return false;
 
         Uniflow* self = this;
-        curr_fn_      = [self, ctx]() -> StepResult
+        curr_fn_      = [self, task]() -> StepResult
         {
-            self->uf_begin_unit_(ctx);
-            return ctx->Entry();
+            self->uf_begin_unit_(task);
+            return task->Entry();
         };
         auto now        = Clock::now();
         flow_running_   = true;
@@ -1775,6 +1783,8 @@ private:
         async_jobs_.clear();
         next_async_id_  = 1;
         uf_active_unit_ = nullptr;
+        uf_current_task_ = task;
+        task->uf_ensure_name_();
         trace_.clear();
         flow_started_pending_ = true;
         flow_origin_          = FlowOrigin{};
@@ -1830,10 +1840,18 @@ public:
         std::lock_guard<std::mutex> lk(op_mu_);
         return flow_running_ ? step_ordinal_ : -1;
     }
+    // Class name of the task currently running ("Task_Pick" - the demangled
+    // short type), empty when idle. Tracks an in-task StartTask switch.
+    std::string CurrentTaskName() const
+    {
+        std::lock_guard<std::mutex> lk(op_mu_);
+        return (flow_running_ && uf_current_task_) ? uf_current_task_->Name()
+                                                   : std::string();
+    }
 
     // The module's built-in per-step timer: re-armed on every step change (but
     // not on a Stay). Reach it from a step via flow().StepTimer(); use Passed /
-    // Elapsed / HeldFor on it the same way as any UFTimer. (TaskContext::Elapsed
+    // Elapsed / HeldFor on it the same way as any UFTimer. (TaskBase::Elapsed
     // is a separate, per-task stopwatch reset on task entry, not per step.)
     UFTimer&       StepTimer() { return uf_step_timer_; }
     const UFTimer& StepTimer() const { return uf_step_timer_; }
@@ -1965,11 +1983,12 @@ private:
     // Stay-polls (the entry thunk re-running) does not re-enter the unit every
     // round. Runs on the PUMP thread (called from the entry / switch thunk), so
     // user OnEnter code sees the single-thread invariant.
-    void uf_begin_unit_(TaskContext* unit)
+    void uf_begin_unit_(TaskBase* unit)
     {
         if (uf_active_unit_ != unit)
         {
             uf_active_unit_ = unit;
+            uf_current_task_ = unit;
             unit->uf_enter_unit_();
         }
     }
@@ -2010,6 +2029,7 @@ private:
         next_async_id_  = 1;
         flow_origin_    = FlowOrigin{};
         uf_active_unit_ = nullptr;
+        uf_current_task_ = nullptr;
     }
 
     std::string instance_name_;
@@ -2065,7 +2085,10 @@ private:
     // The unit context currently active, for unit-entry detection (a threaded
     // context whose address differs means we crossed a boundary) and for
     // recording each step's visit into its Trajectory() on transition.
-    TaskContext* uf_active_unit_ = nullptr;
+    TaskBase* uf_active_unit_ = nullptr;
+    // The task the running flow was armed with: set at arm (and on an in-task
+    // switch) so CurrentTaskName() is answerable immediately; null when idle.
+    TaskBase* uf_current_task_ = nullptr;
 
     // -- Async slots: every in-flight / just-resolved submission for this flow.
     //    A deque keeps slot addresses stable as submissions are appended. The
@@ -2096,8 +2119,8 @@ private:
 //   - Describe(...) / SubmitAsync(...) / AsyncResult<T>(id) - forwarded to flow().
 //
 // Override Entry() to name the task's first step (return it directly). Launch a
-// task with ctx.StartFlow() or module.StartTask(ctx); a module runs one task at
-// a time. AddTask(ctx) in the flow constructor wires flow() once.
+// task with task.StartFlow() or module.StartTask(task); a module runs one task at
+// a time. AddTask(task) in the flow constructor wires flow() once.
 //
 //   struct Task_Pick : uniflow::Task<Flow_LoadPicker> {
 //       StepResult Entry() override { return Step_CmdMoveToSource(); }
@@ -2106,14 +2129,14 @@ private:
 //           return Next(UF_FN(Step_WaitAtSource));
 //       }
 //       StepResult Step_WaitAtSource() { ... }
-//   } ctx_pick_;
-template <class FlowT> class Task : public TaskContext
+//   } task_pick_;
+template <class FlowT> class Task : public TaskBase
 {
 public:
     using StepResult = ::uniflow::StepResult;
 
     // The parent flow, by typed reference. Wired by Uniflow::AddTask before any
-    // step runs; a step reaches sibling tasks (flow().ctx_other_), the flow's
+    // step runs; a step reaches sibling tasks (flow().task_other_), the flow's
     // own state (flow().x_), and its peers through it.
     FlowT&       flow() { return *flow_; }
     const FlowT& flow() const { return *flow_; }
@@ -2227,7 +2250,7 @@ protected:
     template <class OtherTask>
     StepResult StartTask(OtherTask& other)
     {
-        static_assert(std::is_base_of_v<TaskContext, OtherTask>,
+        static_assert(std::is_base_of_v<TaskBase, OtherTask>,
                       "StartTask: target must derive from uniflow::Task<Flow>");
         FlowT*     mod = flow_;
         OtherTask* o   = &other;

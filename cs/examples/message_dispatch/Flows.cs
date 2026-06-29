@@ -53,9 +53,9 @@ namespace Uniflow.Examples.MessageDispatch
         {
             // Phase 2: launch. The viz snapshot task and the two spawner tasks start
             // here; the student task is launched on demand by a spawner's first post.
-            Viz.CtxSnapshot.StartFlow();
-            Prof.CtxEmit.StartFlow();
-            Friend.CtxEmit.StartFlow();
+            Viz.TaskSnapshot.StartFlow();
+            Prof.TaskEmit.StartFlow();
+            Friend.TaskEmit.StartFlow();
         }
 
         public void Shutdown()
@@ -103,13 +103,13 @@ namespace Uniflow.Examples.MessageDispatch
             new Message(MessageKind.Assignment, "review", 3, 2, 0),
         };
 
-        public readonly Task_Emit CtxEmit;
+        public readonly Task_Emit TaskEmit;
 
         public Flow_Professor(Runtime rt, App app) : base(rt, "Flow_Professor")
         {
             App = app;
-            CtxEmit = new Task_Emit();
-            AddTask(CtxEmit);
+            TaskEmit = new Task_Emit();
+            AddTask(TaskEmit);
         }
 
         public int Emitted => _emitted;
@@ -167,7 +167,7 @@ namespace Uniflow.Examples.MessageDispatch
                 Flow_Student student = Flow.App.Student;
                 if (student.IsIdle)
                 {
-                    student.CtxDrain.StartFlow();
+                    student.TaskDrain.StartFlow();
                 }
                 return Stay();
             }
@@ -190,13 +190,13 @@ namespace Uniflow.Examples.MessageDispatch
             new Message(MessageKind.Play, "movie", 0, 0, 4),
         };
 
-        public readonly Task_Emit CtxEmit;
+        public readonly Task_Emit TaskEmit;
 
         public Flow_Friend(Runtime rt, App app) : base(rt, "Flow_Friend")
         {
             App = app;
-            CtxEmit = new Task_Emit();
-            AddTask(CtxEmit);
+            TaskEmit = new Task_Emit();
+            AddTask(TaskEmit);
         }
 
         public int Emitted => _emitted;
@@ -253,7 +253,7 @@ namespace Uniflow.Examples.MessageDispatch
                 Flow_Student student = Flow.App.Student;
                 if (student.IsIdle)
                 {
-                    student.CtxDrain.StartFlow();
+                    student.TaskDrain.StartFlow();
                 }
                 return Stay();
             }
@@ -277,13 +277,13 @@ namespace Uniflow.Examples.MessageDispatch
         private int _hoursSpent;
         private int _doneCount;
 
-        public readonly Task_Drain CtxDrain;
+        public readonly Task_Drain TaskDrain;
 
         public Flow_Student(Runtime rt, App app) : base(rt, "Flow_Student")
         {
             App = app;
-            CtxDrain = new Task_Drain();
-            AddTask(CtxDrain);
+            TaskDrain = new Task_Drain();
+            AddTask(TaskDrain);
         }
 
         public int Ability => _ability;
@@ -496,13 +496,13 @@ namespace Uniflow.Examples.MessageDispatch
     public sealed class Flow_Visualization : Module
     {
         public readonly App App;
-        public readonly Task_Snapshot CtxSnapshot;
+        public readonly Task_Snapshot TaskSnapshot;
 
         public Flow_Visualization(Runtime rt, App app) : base(rt, "Flow_Visualization")
         {
             App = app;
-            CtxSnapshot = new Task_Snapshot();
-            AddTask(CtxSnapshot);
+            TaskSnapshot = new Task_Snapshot();
+            AddTask(TaskSnapshot);
         }
 
         public sealed class Task_Snapshot : Task<Flow_Visualization>

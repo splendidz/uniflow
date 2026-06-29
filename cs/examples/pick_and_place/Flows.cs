@@ -32,8 +32,8 @@ namespace Uniflow.PickAndPlaceExample
         public readonly MotorAxis Finger;
         public bool Carrying;
 
-        public readonly Task_Pick CtxPick;
-        public readonly Task_Place CtxPlace;
+        public readonly Task_Pick TaskPick;
+        public readonly Task_Place TaskPlace;
 
         public Flow_LoadPicker(Runtime rt)
             : base(rt, "Flow_LoadPicker")
@@ -43,10 +43,10 @@ namespace Uniflow.PickAndPlaceExample
             Finger = Dev.Add(new MotorAxis("load_finger", Geometry.FINGER_OPEN_MM, Geometry.FINGER_SPEED_MM_PER_S));
             Carrying = false;
 
-            CtxPick = new Task_Pick();
-            AddTask(CtxPick);
-            CtxPlace = new Task_Place();
-            AddTask(CtxPlace);
+            TaskPick = new Task_Pick();
+            AddTask(TaskPick);
+            TaskPlace = new Task_Place();
+            AddTask(TaskPlace);
         }
 
         // -- Motion state read by the unload picker's B-zone gate and the snapshot
@@ -253,8 +253,8 @@ namespace Uniflow.PickAndPlaceExample
         public readonly MotorAxis Finger;
         public bool Carrying;
 
-        public readonly Task_Pick CtxPick;
-        public readonly Task_Place CtxPlace;
+        public readonly Task_Pick TaskPick;
+        public readonly Task_Place TaskPlace;
 
         public Flow_UnloadPicker(Runtime rt)
             : base(rt, "Flow_UnloadPicker")
@@ -264,10 +264,10 @@ namespace Uniflow.PickAndPlaceExample
             Finger = Dev.Add(new MotorAxis("unload_finger", Geometry.FINGER_OPEN_MM, Geometry.FINGER_SPEED_MM_PER_S));
             Carrying = false;
 
-            CtxPick = new Task_Pick();
-            AddTask(CtxPick);
-            CtxPlace = new Task_Place();
-            AddTask(CtxPlace);
+            TaskPick = new Task_Pick();
+            AddTask(TaskPick);
+            TaskPlace = new Task_Place();
+            AddTask(TaskPlace);
         }
 
         public double XMm() => X.Position();
@@ -484,9 +484,9 @@ namespace Uniflow.PickAndPlaceExample
         public double TableYOffsetMm;
         public string StateField = StageState.IDLE;
 
-        public readonly Task_Prepare CtxPrepare;
-        public readonly Task_Process CtxProcess;
-        public readonly Task_Cleanup CtxCleanup;
+        public readonly Task_Prepare TaskPrepare;
+        public readonly Task_Process TaskProcess;
+        public readonly Task_Cleanup TaskCleanup;
 
         public Flow_Stage(Runtime rt)
             : base(rt, "Flow_Stage")
@@ -496,12 +496,12 @@ namespace Uniflow.PickAndPlaceExample
             TableYOffsetMm = 0.0;
             StateField = StageState.IDLE;
 
-            CtxPrepare = new Task_Prepare();
-            AddTask(CtxPrepare);
-            CtxProcess = new Task_Process();
-            AddTask(CtxProcess);
-            CtxCleanup = new Task_Cleanup();
-            AddTask(CtxCleanup);
+            TaskPrepare = new Task_Prepare();
+            AddTask(TaskPrepare);
+            TaskProcess = new Task_Process();
+            AddTask(TaskProcess);
+            TaskCleanup = new Task_Cleanup();
+            AddTask(TaskCleanup);
         }
 
         public string State() => StateField;
@@ -723,13 +723,13 @@ namespace Uniflow.PickAndPlaceExample
     // ========================================================================
     internal sealed class Flow_Orchestrator : Module
     {
-        public readonly Task_Schedule CtxSchedule;
+        public readonly Task_Schedule TaskSchedule;
 
         public Flow_Orchestrator(Runtime rt)
             : base(rt, "Flow_Orchestrator")
         {
-            CtxSchedule = new Task_Schedule();
-            AddTask(CtxSchedule);
+            TaskSchedule = new Task_Schedule();
+            AddTask(TaskSchedule);
         }
 
         public sealed class Task_Schedule : Task<Flow_Orchestrator>
@@ -760,11 +760,11 @@ namespace Uniflow.PickAndPlaceExample
                 // Carrying -> deliver (Place); else grab the next one (Pick).
                 if (picker.CarryingFlag())
                 {
-                    picker.CtxPlace.StartFlow();
+                    picker.TaskPlace.StartFlow();
                 }
                 else if (Env.ZoneAHasPart())
                 {
-                    picker.CtxPick.StartFlow();
+                    picker.TaskPick.StartFlow();
                 }
             }
 
@@ -776,15 +776,15 @@ namespace Uniflow.PickAndPlaceExample
                 string st = stage.State();
                 if (st == StageState.RAW_PART_LOADED)
                 {
-                    stage.CtxPrepare.StartFlow();
+                    stage.TaskPrepare.StartFlow();
                 }
                 else if (st == StageState.PREPARED)
                 {
-                    stage.CtxProcess.StartFlow();
+                    stage.TaskProcess.StartFlow();
                 }
                 else if (st == StageState.MACHINED)
                 {
-                    stage.CtxCleanup.StartFlow();
+                    stage.TaskCleanup.StartFlow();
                 }
             }
 
@@ -794,7 +794,7 @@ namespace Uniflow.PickAndPlaceExample
                 if (!picker.IsIdle) return;
                 if (picker.CarryingFlag())
                 {
-                    picker.CtxPlace.StartFlow();
+                    picker.TaskPlace.StartFlow();
                     return;
                 }
                 // Prefetch Pick as soon as a part is incoming, so the picker is
@@ -804,7 +804,7 @@ namespace Uniflow.PickAndPlaceExample
                                             || st == StageState.PROCESSED_PART_READY;
                 if (stageHasPartIncoming)
                 {
-                    picker.CtxPick.StartFlow();
+                    picker.TaskPick.StartFlow();
                 }
             }
         }
@@ -816,13 +816,13 @@ namespace Uniflow.PickAndPlaceExample
     // ========================================================================
     internal sealed class Flow_Visualization : Module
     {
-        public readonly Task_Snapshot CtxSnapshot;
+        public readonly Task_Snapshot TaskSnapshot;
 
         public Flow_Visualization(Runtime rt)
             : base(rt, "Flow_Visualization")
         {
-            CtxSnapshot = new Task_Snapshot();
-            AddTask(CtxSnapshot);
+            TaskSnapshot = new Task_Snapshot();
+            AddTask(TaskSnapshot);
         }
 
         public sealed class Task_Snapshot : Task<Flow_Visualization>

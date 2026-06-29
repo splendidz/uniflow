@@ -77,7 +77,7 @@ namespace SharedOstreamExample
 
         // The flow's single task; AddTask wires its Flow back-pointer so its steps
         // reach this module.
-        public readonly Task_Write CtxWrite;
+        public readonly Task_Write TaskWrite;
 
         public Flow_Writer(Runtime rt, string text, int count, int turnId)
             : base(rt, "Flow_Writer")
@@ -85,8 +85,8 @@ namespace SharedOstreamExample
             Text = text;
             Remaining = count;
             TurnId = turnId;
-            CtxWrite = new Task_Write();
-            AddTask(CtxWrite);
+            TaskWrite = new Task_Write();
+            AddTask(TaskWrite);
         }
 
         // The flow's single task (C++: struct Task_Write : uniflow::Task<Flow_Writer>).
@@ -154,8 +154,8 @@ namespace SharedOstreamExample
         // Launch each writer's task on the pump.
         public void Start()
         {
-            _hello.CtxWrite.StartFlow();
-            _world.CtxWrite.StartFlow();
+            _hello.TaskWrite.StartFlow();
+            _world.TaskWrite.StartFlow();
         }
 
         public void WaitForDone()

@@ -273,10 +273,10 @@ class Flow_LoadPicker(uniflow.Uniflow):
                                               Geometry.FINGER_SPEED_MM_PER_S))
         self.carrying = False
 
-        self.ctx_pick = self.Task_Pick()
-        self.AddTask(self.ctx_pick)
-        self.ctx_place = self.Task_Place()
-        self.AddTask(self.ctx_place)
+        self.task_pick = self.Task_Pick()
+        self.AddTask(self.task_pick)
+        self.task_place = self.Task_Place()
+        self.AddTask(self.task_place)
 
     # -- Motion state read by the unload picker's B-zone gate and the snapshot --
     def x_mm(self):
@@ -497,10 +497,10 @@ class Flow_UnloadPicker(uniflow.Uniflow):
                                               Geometry.FINGER_SPEED_MM_PER_S))
         self.carrying = False
 
-        self.ctx_pick = self.Task_Pick()
-        self.AddTask(self.ctx_pick)
-        self.ctx_place = self.Task_Place()
-        self.AddTask(self.ctx_place)
+        self.task_pick = self.Task_Pick()
+        self.AddTask(self.task_pick)
+        self.task_place = self.Task_Place()
+        self.AddTask(self.task_place)
 
     def x_mm(self):
         return self.x.position()
@@ -726,12 +726,12 @@ class Flow_Stage(uniflow.Uniflow):
         self.table_y_offset_mm = 0.0
         self.state_ = StageState.IDLE
 
-        self.ctx_prepare = self.Task_Prepare()
-        self.AddTask(self.ctx_prepare)
-        self.ctx_process = self.Task_Process()
-        self.AddTask(self.ctx_process)
-        self.ctx_cleanup = self.Task_Cleanup()
-        self.AddTask(self.ctx_cleanup)
+        self.task_prepare = self.Task_Prepare()
+        self.AddTask(self.task_prepare)
+        self.task_process = self.Task_Process()
+        self.AddTask(self.task_process)
+        self.task_cleanup = self.Task_Cleanup()
+        self.AddTask(self.task_cleanup)
 
     def state(self):
         return self.state_
@@ -927,8 +927,8 @@ class Flow_Stage(uniflow.Uniflow):
 class Flow_Orchestrator(uniflow.Uniflow):
     def __init__(self, rt):
         super().__init__(rt, name="Flow_Orchestrator")
-        self.ctx_schedule = self.Task_Schedule()
-        self.AddTask(self.ctx_schedule)
+        self.task_schedule = self.Task_Schedule()
+        self.AddTask(self.task_schedule)
 
     class Task_Schedule(uniflow.Task):
         def Entry(self):
@@ -955,9 +955,9 @@ class Flow_Orchestrator(uniflow.Uniflow):
                 return
             # Carrying -> deliver (Place); else grab the next one (Pick).
             if picker.carrying_flag():
-                picker.ctx_place.StartFlow()
+                picker.task_place.StartFlow()
             elif Env.zone_a_has_part():
-                picker.ctx_pick.StartFlow()
+                picker.task_pick.StartFlow()
 
         def _try_drive_stage(self):
             stage = App.inst().stage
@@ -966,18 +966,18 @@ class Flow_Orchestrator(uniflow.Uniflow):
             # One task per machining phase, launched as the previous completes.
             st = stage.state()
             if st == StageState.RAW_PART_LOADED:
-                stage.ctx_prepare.StartFlow()
+                stage.task_prepare.StartFlow()
             elif st == StageState.PREPARED:
-                stage.ctx_process.StartFlow()
+                stage.task_process.StartFlow()
             elif st == StageState.MACHINED:
-                stage.ctx_cleanup.StartFlow()
+                stage.task_cleanup.StartFlow()
 
         def _try_drive_unload_picker(self):
             picker = App.inst().unload
             if not picker.IsIdle():
                 return
             if picker.carrying_flag():
-                picker.ctx_place.StartFlow()
+                picker.task_place.StartFlow()
                 return
             # Prefetch Pick as soon as a part is incoming, so the picker is
             # already hovering above B when the stage finishes.
@@ -985,7 +985,7 @@ class Flow_Orchestrator(uniflow.Uniflow):
             stage_has_part_incoming = st in (StageState.PREPARED, StageState.MACHINED,
                                              StageState.PROCESSED_PART_READY)
             if stage_has_part_incoming:
-                picker.ctx_pick.StartFlow()
+                picker.task_pick.StartFlow()
 
 
 # ============================================================================
@@ -996,8 +996,8 @@ class Flow_Orchestrator(uniflow.Uniflow):
 class Flow_Visualization(uniflow.Uniflow):
     def __init__(self, rt):
         super().__init__(rt, name="Flow_Visualization")
-        self.ctx_snapshot = self.Task_Snapshot()
-        self.AddTask(self.ctx_snapshot)
+        self.task_snapshot = self.Task_Snapshot()
+        self.AddTask(self.task_snapshot)
 
     class Task_Snapshot(uniflow.Task):
         def Entry(self):
@@ -1195,8 +1195,8 @@ class App:
         self.orch = Flow_Orchestrator(self.rt)
 
     def start(self):
-        self.viz.ctx_snapshot.StartFlow()
-        self.orch.ctx_schedule.StartFlow()
+        self.viz.task_snapshot.StartFlow()
+        self.orch.task_schedule.StartFlow()
 
     def shutdown(self):
         Env.request_stop()

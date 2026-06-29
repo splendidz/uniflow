@@ -36,7 +36,7 @@ public:
     void OnRawPartReceived();
     void OnProcessedPartTaken();
 
-    // -- Tasks (public so the orchestrator launches them with ctx.StartFlow()). --
+    // -- Tasks (public so the orchestrator launches them with task.StartFlow()). --
 
     // Prepare : start cmd (async), ack, then wait for HW ready.
     struct Task_Prepare : uniflow::Task<Flow_Stage>
@@ -54,7 +54,7 @@ public:
         StepResult Step4_HwTimeout();
 
         static bool SimulateStartCmd();
-    } ctx_prepare_;
+    } task_prepare_;
 
     // Process : figure-8 machining run over kProcessDuration.
     struct Task_Process : uniflow::Task<Flow_Stage>
@@ -66,7 +66,7 @@ public:
         uniflow::UFTimer run;                     // machining elapsed timer
 
         StepResult Step1_Process();
-    } ctx_process_;
+    } task_process_;
 
     // Cleanup : cleanup cmd (async), ack, return to pick pos.
     struct Task_Cleanup : uniflow::Task<Flow_Stage>
@@ -80,7 +80,7 @@ public:
         StepResult Step3_ReturnToPickPos();
 
         static bool SimulateCleanupCmd();
-    } ctx_cleanup_;
+    } task_cleanup_;
 
 private:
     static constexpr uniflow::Duration kProcessDuration = 5000ms;

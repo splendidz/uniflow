@@ -10,7 +10,7 @@ using namespace uniflow;
 Flow_Orchestrator::Flow_Orchestrator(uniflow::Runtime& rt)
     : uniflow::Uniflow<Flow_Orchestrator>(rt, "Flow_Orchestrator")
 {
-    AddTask(ctx_schedule_);
+    AddTask(task_schedule_);
 }
 
 StepResult Flow_Orchestrator::Task_Schedule::Step1_Tick()
@@ -49,11 +49,11 @@ void Flow_Orchestrator::TryDriveLoadPicker()
     // The Place task itself parks at the A-gap until zone B is clear.
     if (picker.Carrying())
     {
-        picker.ctx_place_.StartFlow();
+        picker.task_place_.StartFlow();
     }
     else if (GlobalEnv::ZoneAHasPart())
     {
-        picker.ctx_pick_.StartFlow();
+        picker.task_pick_.StartFlow();
     }
 }
 
@@ -68,13 +68,13 @@ void Flow_Orchestrator::TryDriveStage()
     switch (stage.state())
     {
     case StageState::RawPartLoaded:
-        stage.ctx_prepare_.StartFlow();
+        stage.task_prepare_.StartFlow();
         break;
     case StageState::Prepared:
-        stage.ctx_process_.StartFlow();
+        stage.task_process_.StartFlow();
         break;
     case StageState::Machined:
-        stage.ctx_cleanup_.StartFlow();
+        stage.task_cleanup_.StartFlow();
         break;
     default:
         break;
@@ -90,7 +90,7 @@ void Flow_Orchestrator::TryDriveUnloadPicker()
     }
     if (picker.Carrying())
     {
-        picker.ctx_place_.StartFlow();
+        picker.task_place_.StartFlow();
         return;
     }
     // Prefetch the Pick task as soon as a part is incoming, so the picker is
@@ -103,6 +103,6 @@ void Flow_Orchestrator::TryDriveUnloadPicker()
      || st == StageState::ProcessedPartReady;
     if (stage_has_part_incoming)
     {
-        picker.ctx_pick_.StartFlow();
+        picker.task_pick_.StartFlow();
     }
 }

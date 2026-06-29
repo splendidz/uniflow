@@ -11,8 +11,8 @@ Flow_Professor::Flow_Professor(uniflow::Runtime& rt)
       rng_(1)
 {
     // AddTask wires the task's flow() back-pointer so its steps reach this flow
-    // and so ctx_emit_.StartFlow() knows which module to launch.
-    AddTask(ctx_emit_);
+    // and so task_emit_.StartFlow() knows which module to launch.
+    AddTask(task_emit_);
 
     tasks_ = {
         {Message::Kind::Assignment, "essay",   2, 4, 0},
@@ -49,7 +49,7 @@ StepResult Flow_Professor::Task_Emit::Step2_Tick()
     Flow_Student& student = App::inst().student;
     if (student.IsIdle())
     {
-        student.ctx_drain_.StartFlow();
+        student.task_drain_.StartFlow();
     }
     return Stay();
 }

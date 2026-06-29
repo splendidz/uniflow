@@ -41,8 +41,8 @@ public:
     // the sender relaunches its drain task on the first burst.
     void Start()
     {
-        viz.ctx_snapshot_.StartFlow();
-        send.ctx_emit_.StartFlow();
+        viz.task_snapshot_.StartFlow();
+        send.task_emit_.StartFlow();
     }
 
     void Shutdown()

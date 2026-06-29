@@ -96,7 +96,7 @@ public:
     explicit Flow_Example(uniflow::Runtime& rt)
         : uniflow::Uniflow<Flow_Example>(rt, "Example")
     {
-        AddTask(ctx_);                 // task를 flow에 연결 (한 줄, task당 한 번)
+        AddTask(task_);                 // task를 flow에 연결 (한 줄, task당 한 번)
     }
 
     // task = 단위 작업. 자신의 스텝 멤버 함수를 소유한다. public이라 외부에서 진입 가능.
@@ -108,7 +108,7 @@ public:
         StepResult Step1_Begin();
         StepResult Step2_Work();
         StepResult Step3_Done();
-    } ctx_;
+    } task_;
 
 private:
     bool ready_ = true;                // 상태는 flow가 들고, 스텝은 flow()로 읽는다
@@ -136,7 +136,7 @@ int main()
     uniflow::Runtime rt;               // 펌프 스레드 1개를 띄운다
     Flow_Example     flow{rt};
 
-    flow.ctx_.StartFlow();             // 어느 스레드에서도 호출 가능
+    flow.task_.StartFlow();             // 어느 스레드에서도 호출 가능
     flow.WaitUntilIdle();
 }
 ```
@@ -155,8 +155,8 @@ class Flow_Example(uniflow.Uniflow):
     def __init__(self, rt):
         super().__init__(rt, name="Example")
         self.ready = True              # 상태는 flow가 들고, 스텝은 flow()로 읽는다
-        self.ctx = self.MyTask()
-        self.AddTask(self.ctx)         # task를 flow에 연결 (한 줄, task당 한 번)
+        self.task = self.MyTask()
+        self.AddTask(self.task)         # task를 flow에 연결 (한 줄, task당 한 번)
 
     # task = 단위 작업. 자신의 스텝 메서드를 소유한다.
     class MyTask(uniflow.Task):
@@ -180,7 +180,7 @@ def main():
     rt = uniflow.Runtime()             # 펌프 스레드 1개를 띄운다
     flow = Flow_Example(rt)
 
-    flow.ctx.StartFlow()               # 어느 스레드에서도 호출 가능
+    flow.task.StartFlow()               # 어느 스레드에서도 호출 가능
     flow.WaitUntilIdle()
     rt.stop()
 
@@ -201,12 +201,12 @@ using Uniflow;
 sealed class Flow_Example : Module
 {
     public bool Ready = true;          // 상태는 flow가 들고, 스텝은 Flow로 읽는다
-    public readonly MyTask Ctx;
+    public readonly MyTask TaskT;
 
     public Flow_Example(Runtime rt) : base(rt, "Example")
     {
-        Ctx = new MyTask();
-        AddTask(Ctx);                  // task를 flow에 연결 (한 줄, task당 한 번)
+        TaskT = new MyTask();
+        AddTask(TaskT);                  // task를 flow에 연결 (한 줄, task당 한 번)
     }
 
     // task = 단위 작업. 자신의 스텝 메서드를 소유한다.
@@ -240,7 +240,7 @@ static class Program
         using var rt = new Runtime();              // 펌프 스레드 1개를 띄운다
         var flow = new Flow_Example(rt);
 
-        flow.Ctx.StartFlow();                      // 어느 스레드에서도 호출 가능
+        flow.TaskT.StartFlow();                      // 어느 스레드에서도 호출 가능
         flow.WaitUntilIdle();
     }
 }
@@ -340,8 +340,8 @@ Flow_Conveyor conveyor{rt};     // Conveyor 관련 Task 집합
 Flow_Gripper  gripper{rt};      // Gripper 관련 Task 집합
 
 // 네 모듈이 한 스레드 위에서 동시에 진행 - 뮤텍스 없음
-x_axis.ctx_home_.StartFlow();
-conveyor.ctx_run_.StartFlow();
+x_axis.task_home_.StartFlow();
+conveyor.task_run_.StartFlow();
 ```
 
 같은 `Runtime` 위의 모듈들은 단일 스레드 불변식을 공유하므로, 모듈 간 상태 접근에 뮤텍스가 필요 없다. X축이 `Stay()` 폴링 중인 라운드에도 컨베이어의 단계가 진행된다.
@@ -360,8 +360,8 @@ conveyor.ctx_run_.StartFlow();
 //   t1.join(); t2.join();
 //
 // uniflow 방식 (스레드 하나):
-//   x_axis.ctx_home_.StartFlow();
-//   y_axis.ctx_home_.StartFlow();
+//   x_axis.task_home_.StartFlow();
+//   y_axis.task_home_.StartFlow();
 //   rt.WaitAll();
 
 // -- Flow_XAxis ---------------------------------
@@ -370,7 +370,7 @@ class Flow_XAxis : public uniflow::Uniflow<Flow_XAxis>
 public:
     Flow_XAxis(uniflow::Runtime& rt) : uniflow::Uniflow<Flow_XAxis>(rt, "XAxis")
     {
-        AddTask(ctx_home_);
+        AddTask(task_home_);
     }
 
     struct Task_Home : uniflow::Task<Flow_XAxis>
@@ -388,7 +388,7 @@ public:
                 return Stay();                  // 아직 이동 중 - 이 라운드는 여기서 끝
             return Done();                      // 완료
         }
-    } ctx_home_;
+    } task_home_;
 
 private:
     Motor motor_;
@@ -401,8 +401,8 @@ uniflow::Runtime rt;
 Flow_XAxis x_axis{rt};
 Flow_YAxis y_axis{rt};
 
-x_axis.ctx_home_.StartFlow();   // X 홈 복귀 시작
-y_axis.ctx_home_.StartFlow();   // Y 홈 복귀 시작 (동시에)
+x_axis.task_home_.StartFlow();   // X 홈 복귀 시작
+y_axis.task_home_.StartFlow();   // Y 홈 복귀 시작 (동시에)
 
 // 펌프 라운드마다:
 //   Round 1: X.Step1(이동 명령) -> Next  |  Y.Step1(이동 명령) -> Next
@@ -431,8 +431,8 @@ y_axis.WaitUntilIdle();
 #   t1.start(); t2.start(); t1.join(); t2.join()
 #
 # uniflow 방식 (스레드 하나):
-#   x_axis.ctx_home.StartFlow()
-#   y_axis.ctx_home.StartFlow()
+#   x_axis.task_home.StartFlow()
+#   y_axis.task_home.StartFlow()
 #   rt.WaitUntilIdle()
 
 # -- Flow_XAxis ---------------------------------
@@ -440,8 +440,8 @@ class Flow_XAxis(uniflow.Uniflow):
     def __init__(self, rt):
         super().__init__(rt, name="XAxis")
         self.motor = Motor()
-        self.ctx_home = self.Task_Home()
-        self.AddTask(self.ctx_home)
+        self.task_home = self.Task_Home()
+        self.AddTask(self.task_home)
 
     class Task_Home(uniflow.Task):
         def Entry(self):
@@ -464,8 +464,8 @@ rt = uniflow.Runtime()
 x_axis = Flow_XAxis(rt)
 y_axis = Flow_YAxis(rt)
 
-x_axis.ctx_home.StartFlow()   # X 홈 복귀 시작
-y_axis.ctx_home.StartFlow()   # Y 홈 복귀 시작 (동시에)
+x_axis.task_home.StartFlow()   # X 홈 복귀 시작
+y_axis.task_home.StartFlow()   # Y 홈 복귀 시작 (동시에)
 
 # 펌프 라운드마다:
 #   Round 1: X.Step1(이동 명령) -> Next  |  Y.Step1(이동 명령) -> Next
@@ -493,20 +493,20 @@ y_axis.WaitUntilIdle()
 //   t1.Start(); t2.Start(); t1.Join(); t2.Join();
 //
 // uniflow 방식 (스레드 하나):
-//   xAxis.CtxHome.StartFlow();
-//   yAxis.CtxHome.StartFlow();
+//   xAxis.TaskHome.StartFlow();
+//   yAxis.TaskHome.StartFlow();
 //   rt.WaitUntilIdle();
 
 // -- Flow_XAxis ---------------------------------
 sealed class Flow_XAxis : Module
 {
     public readonly Motor Motor = new Motor();
-    public readonly Task_Home CtxHome;
+    public readonly Task_Home TaskHome;
 
     public Flow_XAxis(Runtime rt) : base(rt, "XAxis")
     {
-        CtxHome = new Task_Home();
-        AddTask(CtxHome);
+        TaskHome = new Task_Home();
+        AddTask(TaskHome);
     }
 
     public sealed class Task_Home : Task<Flow_XAxis>
@@ -535,8 +535,8 @@ using var rt = new Runtime();
 var xAxis = new Flow_XAxis(rt);
 var yAxis = new Flow_YAxis(rt);
 
-xAxis.CtxHome.StartFlow();   // X 홈 복귀 시작
-yAxis.CtxHome.StartFlow();   // Y 홈 복귀 시작 (동시에)
+xAxis.TaskHome.StartFlow();   // X 홈 복귀 시작
+yAxis.TaskHome.StartFlow();   // Y 홈 복귀 시작 (동시에)
 
 // 펌프 라운드마다:
 //   Round 1: X.Step1(이동 명령) -> Next  |  Y.Step1(이동 명령) -> Next
@@ -726,11 +726,11 @@ public:
     explicit Flow_PickPlace(uniflow::Runtime& rt)
         : uniflow::Uniflow<Flow_PickPlace>(rt, "PickPlace")
     {
-        AddTask(ctx_pick_);
-        AddTask(ctx_place_);
+        AddTask(task_pick_);
+        AddTask(task_place_);
     }
 
-    // public - 오케스트레이터가 ctx.StartFlow()로 원하는 단위를 직접 진입
+    // public - 오케스트레이터가 task.StartFlow()로 원하는 단위를 직접 진입
     struct Task_Pick : uniflow::Task<Flow_PickPlace>
     {
         int part_id = 0;                               // task 내 스텝들이 공유하는 상태
@@ -746,10 +746,10 @@ public:
         StepResult Step2_WaitAtSource()
         {
             if (!flow().arm_.IsReady()) return Stay();
-            flow().ctx_place_.slot = flow().dest_.FreeSlot();
-            return StartTask(flow().ctx_place_);       // Task_Place로 전환
+            flow().task_place_.slot = flow().dest_.FreeSlot();
+            return StartTask(flow().task_place_);       // Task_Place로 전환
         }
-    } ctx_pick_;
+    } task_pick_;
 
     struct Task_Place : uniflow::Task<Flow_PickPlace>
     {
@@ -764,7 +764,7 @@ public:
         }
 
         StepResult Step2_Release() { flow().arm_.Release(); return Done(); }
-    } ctx_place_;
+    } task_place_;
 };
 ```
 
@@ -777,12 +777,12 @@ public:
 class Flow_PickPlace(uniflow.Uniflow):
     def __init__(self, rt):
         super().__init__(rt, name="PickPlace")
-        self.ctx_pick = self.Task_Pick()
-        self.AddTask(self.ctx_pick)
-        self.ctx_place = self.Task_Place()
-        self.AddTask(self.ctx_place)
+        self.task_pick = self.Task_Pick()
+        self.AddTask(self.task_pick)
+        self.task_place = self.Task_Place()
+        self.AddTask(self.task_place)
 
-    # public - 오케스트레이터가 ctx.StartFlow()로 원하는 단위를 직접 진입
+    # public - 오케스트레이터가 task.StartFlow()로 원하는 단위를 직접 진입
     class Task_Pick(uniflow.Task):
         def __init__(self):
             super().__init__()
@@ -798,8 +798,8 @@ class Flow_PickPlace(uniflow.Uniflow):
         def Step2_WaitAtSource(self):
             if not self.flow().arm.IsReady():
                 return self.Stay()
-            self.flow().ctx_place.slot = self.flow().dest.FreeSlot()
-            return self.StartTask(self.flow().ctx_place)   # Task_Place로 전환
+            self.flow().task_place.slot = self.flow().dest.FreeSlot()
+            return self.StartTask(self.flow().task_place)   # Task_Place로 전환
 
     class Task_Place(uniflow.Task):
         def __init__(self):
@@ -826,18 +826,18 @@ class Flow_PickPlace(uniflow.Uniflow):
 ```csharp
 sealed class Flow_PickPlace : Module
 {
-    public readonly Task_Pick CtxPick;
-    public readonly Task_Place CtxPlace;
+    public readonly Task_Pick TaskPick;
+    public readonly Task_Place TaskPlace;
 
     public Flow_PickPlace(Runtime rt) : base(rt, "PickPlace")
     {
-        CtxPick = new Task_Pick();
-        AddTask(CtxPick);
-        CtxPlace = new Task_Place();
-        AddTask(CtxPlace);
+        TaskPick = new Task_Pick();
+        AddTask(TaskPick);
+        TaskPlace = new Task_Place();
+        AddTask(TaskPlace);
     }
 
-    // public - 오케스트레이터가 Ctx.StartFlow()로 원하는 단위를 직접 진입
+    // public - 오케스트레이터가 TaskT.StartFlow()로 원하는 단위를 직접 진입
     public sealed class Task_Pick : Task<Flow_PickPlace>
     {
         public int PartId;                                 // task 내 스텝들이 공유하는 상태
@@ -852,7 +852,7 @@ sealed class Flow_PickPlace : Module
         StepResult Step2_WaitAtSource()
         {
             if (!Flow.Arm.IsReady()) return Stay();
-            Flow.CtxPlace.Slot = Flow.Dest.FreeSlot();
+            Flow.TaskPlace.Slot = Flow.Dest.FreeSlot();
             // C#에서 StartTask는 StepResult가 아니라 StartResult를 반환하므로 스텝이
             // "return StartTask(...)"를 할 수 없다. 이 task를 끝내고 pick_and_place
             // 예제처럼 오케스트레이터가 StartFlow()로 Task_Place를 띄운다.
@@ -880,8 +880,8 @@ sealed class Flow_PickPlace : Module
 }
 
 // Pick -> Place 오케스트레이션: Pick이 끝나면 오케스트레이터가 Place를 띄운다.
-//   flow.CtxPick.StartFlow();  flow.WaitUntilIdle();
-//   flow.CtxPlace.StartFlow(); flow.WaitUntilIdle();
+//   flow.TaskPick.StartFlow();  flow.WaitUntilIdle();
+//   flow.TaskPlace.StartFlow(); flow.WaitUntilIdle();
 ```
 
 </details>

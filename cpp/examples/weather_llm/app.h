@@ -21,7 +21,7 @@ public:
     void Start()
     {
         // Launch the fetch task; the pump drives it to completion.
-        weather.ctx_fetch_.StartFlow();
+        weather.task_fetch_.StartFlow();
     }
 
     void Shutdown()

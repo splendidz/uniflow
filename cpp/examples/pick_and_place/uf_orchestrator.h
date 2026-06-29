@@ -12,18 +12,18 @@ public:
     explicit Flow_Orchestrator(uniflow::Runtime& rt);
 
     // The single perpetual Schedule task (public so app.Start() launches it with
-    // ctx.StartFlow()). Its one step polls the line and drives every module.
+    // task.StartFlow()). Its one step polls the line and drives every module.
     struct Task_Schedule : uniflow::Task<Flow_Orchestrator>
     {
         StepResult Entry() override { return Step1_Tick(); }
 
     private:
         StepResult Step1_Tick();
-    } ctx_schedule_;
+    } task_schedule_;
 
 private:
     // Each picks the next task for a module and launches it when the module is
-    // idle (ctx.StartFlow()). The pickers/Stage never sequence themselves.
+    // idle (task.StartFlow()). The pickers/Stage never sequence themselves.
     void TryCreateRawPart();
     void TryDriveLoadPicker();
     void TryDriveStage();

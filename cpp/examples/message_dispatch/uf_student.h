@@ -24,7 +24,7 @@ public:
     const Message& CurrentMessage() const { return current_; }
 
     // The single draining task. Public so spawners / App launch it with
-    // ctx_drain_.StartFlow().
+    // task_drain_.StartFlow().
     struct Task_Drain : uniflow::Task<Flow_Student>
     {
         StepResult Entry() override { return Step1_TakeNext(); }
@@ -49,7 +49,7 @@ public:
         // Static helper for SubmitAsync. Simulates 'hours' of blocking work on a
         // pool thread (never on the pump). Has no access to 'this'.
         static int SimHours(int hours);
-    } ctx_drain_;
+    } task_drain_;
 
 private:
     bool BothSpawnersDone() const;

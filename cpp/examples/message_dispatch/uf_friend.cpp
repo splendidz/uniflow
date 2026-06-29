@@ -10,7 +10,7 @@ Flow_Friend::Flow_Friend(uniflow::Runtime& rt)
     : uniflow::Uniflow<Flow_Friend>(rt, "Flow_Friend"),
       rng_(2)
 {
-    AddTask(ctx_emit_);
+    AddTask(task_emit_);
 
     plays_ = {
         {Message::Kind::Play, "soccer",     0, 0, 6},
@@ -44,7 +44,7 @@ StepResult Flow_Friend::Task_Emit::Step2_Tick()
     Flow_Student& student = App::inst().student;
     if (student.IsIdle())
     {
-        student.ctx_drain_.StartFlow();
+        student.task_drain_.StartFlow();
     }
     return Stay();
 }

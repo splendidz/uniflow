@@ -30,8 +30,8 @@ public:
     // Phase 2 - launch each writer's task on the pump.
     void Start()
     {
-        hello.ctx_write_.StartFlow();
-        world.ctx_write_.StartFlow();
+        hello.task_write_.StartFlow();
+        world.task_write_.StartFlow();
     }
 
     void WaitForDone()

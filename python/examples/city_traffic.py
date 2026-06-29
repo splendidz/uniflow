@@ -293,9 +293,9 @@ def read_snapshot():
 class Flow_TrafficLight(uniflow.Uniflow):
     def __init__(self, rt, node_id):
         super().__init__(rt, name=node_by_id(node_id).label or "T?")
-        self.ctx_signal = self.Task_Signal()
-        self.AddTask(self.ctx_signal)
-        self.ctx_signal.init(node_id)
+        self.task_signal = self.Task_Signal()
+        self.AddTask(self.task_signal)
+        self.task_signal.init(node_id)
 
     class Task_Signal(uniflow.Task):
         def init(self, node_id):
@@ -367,9 +367,9 @@ K_JUNCTION_ZONE = 0.25  # a car this far past our node is still "in the junction
 class Flow_Vehicle(uniflow.Uniflow):
     def __init__(self, rt, vid, frm, to, dist0, r, g, b):
         super().__init__(rt, name="Flow_Vehicle")
-        self.ctx_drive = self.Task_Drive()
-        self.AddTask(self.ctx_drive)
-        self.ctx_drive.init(vid, frm, to, dist0, r, g, b)
+        self.task_drive = self.Task_Drive()
+        self.AddTask(self.task_drive)
+        self.task_drive.init(vid, frm, to, dist0, r, g, b)
 
     class Task_Drive(uniflow.Task):
         def init(self, vid, frm, to, dist0, r, g, b):
@@ -784,8 +784,8 @@ class Flow_Vehicle(uniflow.Uniflow):
 class Flow_Visualization(uniflow.Uniflow):
     def __init__(self, rt):
         super().__init__(rt, name="Flow_Visualization")
-        self.ctx_snapshot = self.Task_Snapshot()
-        self.AddTask(self.ctx_snapshot)
+        self.task_snapshot = self.Task_Snapshot()
+        self.AddTask(self.task_snapshot)
 
     class Task_Snapshot(uniflow.Task):
         def Entry(self):
@@ -1025,11 +1025,11 @@ class App:
 
     def Start(self):
         # Phase 2: launch every task. Each StartFlow() puts one task on the pump.
-        self.viz.ctx_snapshot.StartFlow()
+        self.viz.task_snapshot.StartFlow()
         for light in self.lights:
-            light.ctx_signal.StartFlow()
+            light.task_signal.StartFlow()
         for v in self.vehicles:
-            v.ctx_drive.StartFlow()
+            v.task_drive.StartFlow()
 
     def Shutdown(self):
         g_stop.set()        # every step checks this and returns Done()

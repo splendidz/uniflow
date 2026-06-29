@@ -24,7 +24,7 @@ public:
 
         StepResult Step1_Draw();
         void       Render();
-    } ctx_draw_;
+    } task_draw_;
 
 private:
     uniflow::VirtualClock& clock_;   // read scale/frozen state for the header

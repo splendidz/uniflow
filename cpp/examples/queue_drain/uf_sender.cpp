@@ -10,7 +10,7 @@ Flow_Sender::Flow_Sender(uniflow::Runtime& rt)
     : uniflow::Uniflow<Flow_Sender>(rt, "Flow_Sender"),
       rng_(std::random_device{}())
 {
-    AddTask(ctx_emit_);
+    AddTask(task_emit_);
     FillVectors();
 }
 
@@ -57,7 +57,7 @@ StepResult Flow_Sender::Task_Emit::Step1_Tick()
     auto& recv = App::inst().recv;
     if (recv.IsIdle())
     {
-        recv.ctx_drain_.StartFlow();
+        recv.task_drain_.StartFlow();
     }
 
     return Stay();

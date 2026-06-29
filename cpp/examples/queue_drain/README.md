@@ -40,7 +40,7 @@ the **park / relaunch** wake pattern.
 
 - **Park / relaunch wake.** After each burst the sender checks
   `receiver.IsIdle()` and, if the receiver parked, relaunches its drain task with
-  `recv.ctx_drain_.StartFlow()`. Both calls are in-thread, so there is no
+  `recv.task_drain_.StartFlow()`. Both calls are in-thread, so there is no
   cross-thread signal (see `Step1_Tick` in [uf_sender.cpp](uf_sender.cpp)).
 
 - **Console / ANSI render pattern.** [console.h](console.h) /

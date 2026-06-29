@@ -20,7 +20,7 @@ Flow_View::Flow_View(uniflow::Runtime& rt)
     : uniflow::Uniflow<Flow_View>(rt, "Flow_View"),
       clock_(rt.clock())
 {
-    AddTask(ctx_draw_);
+    AddTask(task_draw_);
 }
 
 StepResult Flow_View::Task_Draw::Step1_Draw()

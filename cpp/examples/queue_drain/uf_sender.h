@@ -17,7 +17,7 @@ public:
     explicit Flow_Sender(uniflow::Runtime& rt);
 
     // The single perpetual emit task (public so app.Start() launches it with
-    // ctx.StartFlow()). Its step re-arms the burst timer on task entry.
+    // task.StartFlow()). Its step re-arms the burst timer on task entry.
     struct Task_Emit : uniflow::Task<Flow_Sender>
     {
         void OnEnter() override { gap_.Restart(); } // re-arm the burst timer
@@ -27,7 +27,7 @@ public:
         uniflow::UFTimer gap_;   // wall-clock throttle between bursts
 
         StepResult Step1_Tick();
-    } ctx_emit_;
+    } task_emit_;
 
     // Read on the snapshot step (same pump thread). Safe, no lock.
     const std::vector<int>& VecA() const { return vec_a_; }

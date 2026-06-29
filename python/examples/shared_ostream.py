@@ -69,8 +69,8 @@ class Flow_Writer(uniflow.Uniflow):
         self.remaining = count
         self.turn_id = turn_id
         # The flow's single task; AddTask wires flow() so its steps reach here.
-        self.ctx_write = self.Task_Write()
-        self.AddTask(self.ctx_write)
+        self.task_write = self.Task_Write()
+        self.AddTask(self.task_write)
 
     def Remaining(self):
         return self.remaining
@@ -125,8 +125,8 @@ class App:
 
     # Phase 2 - launch each writer's task on the pump.
     def Start(self):
-        self.hello.ctx_write.StartFlow()
-        self.world.ctx_write.StartFlow()
+        self.hello.task_write.StartFlow()
+        self.world.task_write.StartFlow()
 
     def WaitForDone(self):
         self.hello.WaitUntilIdle()

@@ -32,7 +32,7 @@
 |---|---|
 | `Uniflow` | **모듈** 베이스. `__init__(rt, *, name=None)` (`name` 키워드 전용). async 슬롯, 내장 `self.uf_timer`, 도는 흐름의 위치를 소유 |
 | ↳ task 바인딩 | `AddTask(task)` (`task.flow()` 를 이 모듈로 연결; 아무것도 시작 안 함), `StartTask(task) -> StartResult` (이 모듈을 `task.Entry()` 에서 런칭; 어느 스레드에서나 호출 가능) |
-| ↳ 조회 | `IsIdle` (비었나?), `WaitUntilIdle(timeout=None)` (*이 모듈* 만 idle 까지 블록), `InstanceName()`, `CurrentStepName()` / `CurrentStepOrdinal()` / `CurrentStepDescription()` (실시간 "흐름이 지금 어디?"; idle 이면 `""` / `-1`), `Cancel()` (도는 흐름을 Fail 로 종료, 이유 `"cancelled"`), `Describe(*parts)` |
+| ↳ 조회 | `IsIdle` (비었나?), `WaitUntilIdle(timeout=None)` (*이 모듈* 만 idle 까지 블록), `InstanceName()`, `CurrentTaskName()` / `CurrentStepName()` / `CurrentStepOrdinal()` / `CurrentStepDescription()` (실시간 "어떤 task / 흐름이 지금 어디?"; idle 이면 `""` / `-1`; `task.Name()` 은 task 핸들에서 같은 클래스 이름), `Cancel()` (도는 흐름을 Fail 로 종료, 이유 `"cancelled"`), `Describe(*parts)` |
 | `Task` | **task** 베이스(보통 모듈에 중첩). 상속해서 step 메서드를 정의하고, `Entry()`(첫 step 지정)와 선택적으로 `OnEnter()`(진입 시 per-task 상태 재무장)를 override |
 | ↳ 모듈 접근 | `self.flow()` -> 소유 `Uniflow` (`AddTask` 가 연결), 예: `self.flow().some_attr` |
 | ↳ step 의도 | `Stay()`, `StayTimeout(timeout_sec, timeout_step, *args, **kwargs)` (현재 step 을 계속 폴링하되 step 진입 후 논리 시간 `timeout_sec` 초과 시 `timeout_step` 으로 전이 = step 단위 catch; 성공 경로는 본문이 소유), `StayUntil(condition, settle_sec, success, timeout_sec, timeout_step)` (대기 조건을 접은 형태: `condition` 폴링해 `settle_sec` 유지되면 `success`, 아니면 타임아웃 시 `timeout_step`), `Next(fn, *args, **kwargs)` (형제 step 으로 진행, 인자 전달), `Done()`, `Fail(reason="")`, `Describe(*parts)` (현재 step 의 "지금 뭐 하는지" 한 줄; 다음 전이 때 찍히고 비워짐) |
@@ -69,8 +69,8 @@ import uniflow
 class Flow_Router(uniflow.Uniflow):
     def __init__(self, rt):
         super().__init__(rt, name="Flow_Router")
-        self.ctx = self.Task_Route()
-        self.AddTask(self.ctx)
+        self.task = self.Task_Route()
+        self.AddTask(self.task)
 
     class Task_Route(uniflow.Task):
         def Entry(self):                 # 흐름 시작점: 첫 step 지정
@@ -85,7 +85,7 @@ class Flow_Router(uniflow.Uniflow):
 
 rt = uniflow.Runtime()
 r = Flow_Router(rt)
-r.ctx.StartFlow()
+r.task.StartFlow()
 rt.WaitUntilIdle()
 ```
 

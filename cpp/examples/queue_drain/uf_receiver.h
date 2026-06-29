@@ -27,7 +27,7 @@ public:
     explicit Flow_Receiver(uniflow::Runtime& rt);
 
     // The single drain task. Public so the sender can relaunch it with
-    // ctx.StartFlow() when it parks and a new burst arrives.
+    // task.StartFlow() when it parks and a new burst arrives.
     struct Task_Drain : uniflow::Task<Flow_Receiver>
     {
         StepResult Entry() override { return Step1_TakeNext(); }
@@ -36,7 +36,7 @@ public:
         StepResult Step1_TakeNext();   // pop one job and dispatch by operator
         StepResult Step2_Add();        // a + b
         StepResult Step3_Sub();        // a - b
-    } ctx_drain_;
+    } task_drain_;
 
     // Read-only state for the snapshot step (same pump thread, no lock).
     RecvState          State()      const { return state_; }

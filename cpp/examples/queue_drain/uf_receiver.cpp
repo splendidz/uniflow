@@ -21,7 +21,7 @@ const char* ToString(RecvState s)
 Flow_Receiver::Flow_Receiver(uniflow::Runtime& rt)
     : uniflow::Uniflow<Flow_Receiver>(rt, "Flow_Receiver")
 {
-    AddTask(ctx_drain_);
+    AddTask(task_drain_);
 }
 
 StepResult Flow_Receiver::Task_Drain::Step1_TakeNext()
@@ -37,7 +37,7 @@ StepResult Flow_Receiver::Task_Drain::Step1_TakeNext()
     if (!Mailbox::TryPop(m))
     {
         // Queue drained: park the module. Done() lets it idle until the sender
-        // relaunches this task (ctx.StartFlow()) on the next burst.
+        // relaunches this task (task.StartFlow()) on the next burst.
         flow().state_ = RecvState::Idle;
         Describe("queue drained -> done");
         return Done();

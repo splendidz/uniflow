@@ -447,6 +447,10 @@ namespace Uniflow
         // The owning module (typed). Wired by AddTask in the module ctor.
         protected TFlow Flow => (TFlow)_module!;
 
+        // Class name of this task ("Task_Pick"), the per-task identity the
+        // module reports through CurrentTaskName.
+        public string Name => GetType().Name;
+
         // ----- overridable -----
         protected abstract StepResult Entry();
         protected virtual void OnEnter() { }
@@ -812,6 +816,20 @@ namespace Uniflow
                 lock (_lock)
                 {
                     return _flowRunning ? _stepOrdinal : -1;
+                }
+            }
+        }
+
+        // Class name of the task currently running ("Task_Pick"), empty when
+        // idle. Tracks an in-task StartTask switch.
+        public string CurrentTaskName
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _flowRunning && _activeTask != null
+                        ? _activeTask.GetType().Name : "";
                 }
             }
         }

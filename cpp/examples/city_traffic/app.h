@@ -33,11 +33,11 @@ public:
 
     void Start()
     {
-        viz.ctx_.StartFlow();
+        viz.task_.StartFlow();
         for (auto& l : lights)
-            l->ctx_.StartFlow();
+            l->task_.StartFlow();
         for (auto& v : vehicles)
-            v->ctx_.StartFlow();
+            v->task_.StartFlow();
     }
 
     void Shutdown()

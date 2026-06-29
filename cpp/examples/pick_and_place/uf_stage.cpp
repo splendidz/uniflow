@@ -17,9 +17,9 @@ Flow_Stage::Flow_Stage(uniflow::Runtime& rt)
           "stage_table_x", GlobalGeometry::kZoneB_mm, kTableSpeed_mm_per_s)),
       hw_ready_(MotorIOFactory::inst().CreateLatch("stage_hw_ready", 0.2, 0.7))
 {
-    AddTask(ctx_prepare_);
-    AddTask(ctx_process_);
-    AddTask(ctx_cleanup_);
+    AddTask(task_prepare_);
+    AddTask(task_process_);
+    AddTask(task_cleanup_);
 }
 
 double Flow_Stage::TableX_mm() const

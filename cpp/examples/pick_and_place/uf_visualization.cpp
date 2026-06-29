@@ -20,7 +20,7 @@ using namespace uniflow;
 Flow_Visualization::Flow_Visualization(uniflow::Runtime& rt)
     : uniflow::Uniflow<Flow_Visualization>(rt, "Flow_Visualization")
 {
-    AddTask(ctx_snapshot_);
+    AddTask(task_snapshot_);
 }
 
 // Pump-side: copy live line state into g_snap under g_snap_mu every tick, so

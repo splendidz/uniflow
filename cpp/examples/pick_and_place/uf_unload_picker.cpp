@@ -19,8 +19,8 @@ Flow_UnloadPicker::Flow_UnloadPicker(uniflow::Runtime& rt)
           "unload_finger", GlobalGeometry::kFingerOpen_mm,
           GlobalGeometry::kFingerSpeed_mm_per_s))
 {
-    AddTask(ctx_pick_);
-    AddTask(ctx_place_);
+    AddTask(task_pick_);
+    AddTask(task_place_);
 }
 
 // -- Motion state, read from the borrowed axes. --

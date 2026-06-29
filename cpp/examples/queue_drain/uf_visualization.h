@@ -13,7 +13,7 @@ public:
     explicit Flow_Visualization(uniflow::Runtime& rt);
 
     // The single perpetual snapshot task (public so app.Start() launches it with
-    // ctx.StartFlow()). Its one step copies state into g_snap every round.
+    // task.StartFlow()). Its one step copies state into g_snap every round.
     struct Task_Snapshot : uniflow::Task<Flow_Visualization>
     {
         StepResult Entry() override { return Step1_Tick(); }
@@ -27,7 +27,7 @@ public:
         int    last_processed_ = 0;
         double last_cycle_ms_  = 0.0;
         bool   started_        = false;
-    } ctx_snapshot_;
+    } task_snapshot_;
 };
 
 // Main-thread render loop: background draw thread + stdin getline (Enter quits).

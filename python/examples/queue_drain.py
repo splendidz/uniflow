@@ -8,7 +8,7 @@ lock-free single-pump producer / consumer.
 
 FEATURE FOCUS: park / relaunch wake. When the queue empties, the receiver
 returns Done() and its module PARKS (goes idle). The sender, on its next burst,
-sees recv.IsIdle() and relaunches the drain task with ctx.StartFlow() - the
+sees recv.IsIdle() and relaunches the drain task with task.StartFlow() - the
 classic IsIdle() + StartFlow() wake pattern. Both calls happen inline on the
 same pump thread, so they are plain in-thread calls, no lock, no cross-thread
 signal.
@@ -189,8 +189,8 @@ class Flow_Sender(uniflow.Uniflow):
         # The receiver, wired by the App after construction (relaunch target).
         self.recv = None
 
-        self.ctx_emit = self.Task_Emit()
-        self.AddTask(self.ctx_emit)
+        self.task_emit = self.Task_Emit()
+        self.AddTask(self.task_emit)
 
     def fill_vectors(self):
         for _ in range(GlobalConfig.K_VEC_SIZE):
@@ -243,7 +243,7 @@ class Flow_Sender(uniflow.Uniflow):
             # Wake the receiver if it has parked. Same pump thread, so IsIdle()
             # and StartFlow() are plain in-thread calls - no lock, no signal.
             if f.recv.IsIdle():
-                f.recv.ctx_drain.StartFlow()
+                f.recv.task_drain.StartFlow()
 
             return self.Stay()
 
@@ -267,8 +267,8 @@ class Flow_Receiver(uniflow.Uniflow):
         self.processed = 0
         self.last_result = ""
 
-        self.ctx_drain = self.Task_Drain()
-        self.AddTask(self.ctx_drain)
+        self.task_drain = self.Task_Drain()
+        self.AddTask(self.task_drain)
 
     class Task_Drain(uniflow.Task):
         def Entry(self):
@@ -284,7 +284,7 @@ class Flow_Receiver(uniflow.Uniflow):
             m = Mailbox.try_pop()
             if m is None:
                 # Queue drained: park the module. Done() lets it idle until the
-                # sender relaunches this task (ctx.StartFlow()) on the next burst.
+                # sender relaunches this task (task.StartFlow()) on the next burst.
                 f.state = STATE_IDLE
                 self.Describe("queue drained -> done")
                 return self.Done()
@@ -331,8 +331,8 @@ class Flow_Visualization(uniflow.Uniflow):
         self.send = None
         self.recv = None
 
-        self.ctx_snapshot = self.Task_Snapshot()
-        self.AddTask(self.ctx_snapshot)
+        self.task_snapshot = self.Task_Snapshot()
+        self.AddTask(self.task_snapshot)
 
     class Task_Snapshot(uniflow.Task):
         def OnEnter(self):
@@ -542,8 +542,8 @@ class App:
     def Start(self):
         # Phase 2: launch the perpetual tasks. The receiver is NOT started here -
         # the sender relaunches its drain task on the first burst.
-        self.viz.ctx_snapshot.StartFlow()
-        self.send.ctx_emit.StartFlow()
+        self.viz.task_snapshot.StartFlow()
+        self.send.task_emit.StartFlow()
 
     def Shutdown(self):
         g_stop.set()       # every step polls this and returns Done()

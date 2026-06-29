@@ -21,7 +21,7 @@ public:
     bool   Carrying()     const;
     bool   InsideZoneB()  const;
 
-    // -- Tasks (public so the orchestrator launches them with ctx.StartFlow()). --
+    // -- Tasks (public so the orchestrator launches them with task.StartFlow()). --
 
     // Task: Pick (zone B, contested). Enter B only when Flow_Stage has started
     // processing AND Flow_LoadPicker is neither in B nor carrying toward it;
@@ -38,7 +38,7 @@ public:
         StepResult Step5_HandGrip();
         StepResult Step6_CmdLiftWithPart();
         StepResult Step7_WaitAtPickUp();
-    } ctx_pick_;
+    } task_pick_;
 
     // Task: Place (zone C).
     struct Task_Place : uniflow::Task<Flow_UnloadPicker>
@@ -55,7 +55,7 @@ public:
         StepResult Step7_WaitAtPlaceUp();
         StepResult Step8_CmdRetreat();
         StepResult Step9_WaitAtRetreat();
-    } ctx_place_;
+    } task_place_;
 
 private:
     bool PartnerInZoneB() const;

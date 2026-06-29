@@ -35,8 +35,8 @@ public:
     // Phase 2.
     void Start()
     {
-        viz.ctx_snapshot_.StartFlow();
-        orch.ctx_schedule_.StartFlow();
+        viz.task_snapshot_.StartFlow();
+        orch.task_schedule_.StartFlow();
     }
 
     void Shutdown()

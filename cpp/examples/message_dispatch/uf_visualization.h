@@ -21,7 +21,7 @@ public:
 
     private:
         StepResult Step1_Tick();
-    } ctx_snapshot_;
+    } task_snapshot_;
 };
 
 // Background render loop: clears, then redraws the ANSI dashboard ~25 fps from

@@ -42,13 +42,13 @@ namespace Uniflow.CityTraffic
     // one signal = one perpetual task.
     internal sealed class Flow_TrafficLight : Module
     {
-        public readonly Task_Signal CtxSignal;
+        public readonly Task_Signal TaskSignal;
 
         public Flow_TrafficLight(Runtime rt, int nodeId)
             : base(rt, Map.NodeById(nodeId).Label.Length > 0 ? Map.NodeById(nodeId).Label : "T?")
         {
-            CtxSignal = new Task_Signal(nodeId);
-            AddTask(CtxSignal);
+            TaskSignal = new Task_Signal(nodeId);
+            AddTask(TaskSignal);
         }
 
         public sealed class Task_Signal : Task<Flow_TrafficLight>
@@ -149,14 +149,14 @@ namespace Uniflow.CityTraffic
         public const double EnterClear = 0.27;  // exit edge must be this clear to enter
         public const double JunctionZone = 0.25; // a car this far past our node is "in"
 
-        public readonly Task_Drive CtxDrive;
+        public readonly Task_Drive TaskDrive;
 
         public Flow_Vehicle(Runtime rt, int vid, int frm, int to, double dist0,
                            int r, int g, int b)
             : base(rt, "Flow_Vehicle")
         {
-            CtxDrive = new Task_Drive(vid, frm, to, dist0, r, g, b);
-            AddTask(CtxDrive);
+            TaskDrive = new Task_Drive(vid, frm, to, dist0, r, g, b);
+            AddTask(TaskDrive);
         }
 
         public sealed class Task_Drive : Task<Flow_Vehicle>
@@ -749,13 +749,13 @@ namespace Uniflow.CityTraffic
     // lock is the ONLY cross-thread synchronisation in the demo.
     internal sealed class Flow_Visualization : Module
     {
-        public readonly Task_Snapshot CtxSnapshot;
+        public readonly Task_Snapshot TaskSnapshot;
 
         public Flow_Visualization(Runtime rt)
             : base(rt, "Flow_Visualization")
         {
-            CtxSnapshot = new Task_Snapshot();
-            AddTask(CtxSnapshot);
+            TaskSnapshot = new Task_Snapshot();
+            AddTask(TaskSnapshot);
         }
 
         public sealed class Task_Snapshot : Task<Flow_Visualization>

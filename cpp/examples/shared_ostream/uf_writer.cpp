@@ -11,7 +11,7 @@ Flow_Writer::Flow_Writer(uniflow::Runtime& rt, std::string text, int count,
       remaining_(count),
       turn_id_(turn_id)
 {
-    AddTask(ctx_write_);   // wire the task to this flow (flow() becomes valid)
+    AddTask(task_write_);   // wire the task to this flow (flow() becomes valid)
 }
 
 // Step 1: announce the work, then advance to the append loop. Next() stays

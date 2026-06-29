@@ -37,9 +37,9 @@ public:
     // here; the student task is launched on demand by a spawner's first post.
     void Start()
     {
-        viz.ctx_snapshot_.StartFlow();
-        prof.ctx_emit_.StartFlow();
-        friend_.ctx_emit_.StartFlow();
+        viz.task_snapshot_.StartFlow();
+        prof.task_emit_.StartFlow();
+        friend_.task_emit_.StartFlow();
     }
 
     void Shutdown()

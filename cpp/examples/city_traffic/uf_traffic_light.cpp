@@ -8,8 +8,8 @@ using namespace uniflow;
 Flow_TrafficLight::Flow_TrafficLight(uniflow::Runtime& rt, int node_id)
     : uniflow::Uniflow<Flow_TrafficLight>(rt, citymap::NodeById(node_id).label)
 {
-    AddTask(ctx_);
-    ctx_.Init(node_id);
+    AddTask(task_);
+    task_.Init(node_id);
 }
 
 void Flow_TrafficLight::Task_Signal::Init(int node_id)

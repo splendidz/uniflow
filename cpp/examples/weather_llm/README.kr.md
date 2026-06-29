@@ -37,7 +37,7 @@
 - `http_client.h` / `http_client.cpp` - WinHTTP 래퍼 (GET + Gemini POST),
   JSON escaper, 관대한 Gemini 응답/에러 파서.
 - `app.h` - `Runtime` 와 모듈 하나; `Start()` 는
-  `weather.ctx_fetch_.StartFlow()` 로 태스크를 띄웁니다.
+  `weather.task_fetch_.StartFlow()` 로 태스크를 띄웁니다.
 - `main.cpp` - UTF-8 콘솔 설정 (`SetConsoleOutputCP(CP_UTF8)`) 과
   start/shutdown 브래킷.
 

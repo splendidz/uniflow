@@ -51,8 +51,8 @@ namespace Uniflow.Examples.QueueDrain
         {
             // Phase 2: launch the perpetual tasks. The receiver is NOT started here -
             // the sender relaunches its drain task on the first burst.
-            Viz.CtxSnapshot.StartFlow();
-            Send.CtxEmit.StartFlow();
+            Viz.TaskSnapshot.StartFlow();
+            Send.TaskEmit.StartFlow();
         }
 
         public void Shutdown()

@@ -287,14 +287,14 @@ namespace Uniflow.CityTraffic
         public void Start()
         {
             // Phase 2: launch every task. Each StartFlow() puts one task on the pump.
-            _viz.CtxSnapshot.StartFlow();
+            _viz.TaskSnapshot.StartFlow();
             foreach (Flow_TrafficLight light in _lights)
             {
-                light.CtxSignal.StartFlow();
+                light.TaskSignal.StartFlow();
             }
             foreach (Flow_Vehicle v in _vehicles)
             {
-                v.CtxDrive.StartFlow();
+                v.TaskDrive.StartFlow();
             }
         }
 

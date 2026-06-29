@@ -375,6 +375,11 @@ class Task:
     def flow(self) -> "Uniflow":
         return self._flow
 
+    # Class name of this task ("Task_Pick"), the per-task identity the module
+    # reports through CurrentTaskName().
+    def Name(self) -> str:
+        return type(self).__name__
+
     # ----- step intents -----
     def Stay(self) -> StepResult:
         return StepResult(StepAction.STAY)
@@ -635,6 +640,14 @@ class Uniflow:
     def CurrentStepOrdinal(self) -> int:
         with self._lock:
             return self._step_ordinal if self._flow_running else -1
+
+    def CurrentTaskName(self) -> str:
+        # Class name of the task currently running ("Task_Pick"), empty when
+        # idle. Tracks an in-task StartTask switch (updated on the switch round).
+        with self._lock:
+            if self._flow_running and self._active_task is not None:
+                return type(self._active_task).__name__
+            return ""
 
     def CurrentStepDescription(self) -> str:
         with self._lock:

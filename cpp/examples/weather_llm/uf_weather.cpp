@@ -31,7 +31,7 @@ namespace
 Flow_Weather::Flow_Weather(uniflow::Runtime& rt)
     : uniflow::Uniflow<Flow_Weather>(rt, "Flow_Weather")
 {
-    AddTask(ctx_fetch_);
+    AddTask(task_fetch_);
 }
 
 // ======================================================================

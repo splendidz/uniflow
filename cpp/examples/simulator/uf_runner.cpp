@@ -9,7 +9,7 @@ Flow_Runner::Flow_Runner(uniflow::Runtime& rt, const char* name, int id, double 
       name_(name),
       move_ms_(move_ms)
 {
-    AddTask(ctx_run_);
+    AddTask(task_run_);
     sim::g_rows[id_].name = name_;
 }
 

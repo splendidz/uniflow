@@ -86,8 +86,8 @@ class Flow_Runner(uniflow.Uniflow):
         self.move_sec = move_sec
         self.lap = 0
 
-        self.ctx_run = self.Task_Run()
-        self.AddTask(self.ctx_run)
+        self.task_run = self.Task_Run()
+        self.AddTask(self.task_run)
         g_rows[self.id].name = name
 
     class Task_Run(uniflow.Task):
@@ -162,8 +162,8 @@ class Flow_View(uniflow.Uniflow):
     def __init__(self, rt):
         super().__init__(rt, name="Flow_View")
         self.clock = rt.clock        # read scale/frozen state for the header
-        self.ctx_draw = self.Task_Draw()
-        self.AddTask(self.ctx_draw)
+        self.task_draw = self.Task_Draw()
+        self.AddTask(self.task_draw)
 
     class Task_Draw(uniflow.Task):
         def OnEnter(self):
@@ -258,9 +258,9 @@ class App:
 
     def Start(self):
         # Phase 2: launch every task. Each StartFlow() puts one task on the pump.
-        self.view.ctx_draw.StartFlow()
+        self.view.task_draw.StartFlow()
         for r in self.runners:
-            r.ctx_run.StartFlow()
+            r.task_run.StartFlow()
 
     def Shutdown(self):
         g_stop.set()       # every step checks this and returns Done()

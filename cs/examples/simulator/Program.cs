@@ -94,7 +94,7 @@ namespace Uniflow.SimulatorExample
         public readonly double MoveSec;
         public int Lap = 0;
 
-        public readonly Task_Run CtxRun;
+        public readonly Task_Run TaskRun;
 
         // idx selects this runner's dashboard row; moveSec is the virtual-time
         // length of one Move phase (different per runner for a staggered field).
@@ -103,8 +103,8 @@ namespace Uniflow.SimulatorExample
         {
             Id = idx;
             MoveSec = moveSec;
-            CtxRun = new Task_Run();
-            AddTask(CtxRun);
+            TaskRun = new Task_Run();
+            AddTask(TaskRun);
             Sim.Rows[Id].Name = name;
         }
 
@@ -206,13 +206,13 @@ namespace Uniflow.SimulatorExample
     {
         private static readonly string Sep = "  " + new string('-', 60);
 
-        public readonly Task_Draw CtxDraw;
+        public readonly Task_Draw TaskDraw;
 
         public Flow_View(Runtime rt)
             : base(rt, "Flow_View")
         {
-            CtxDraw = new Task_Draw();
-            AddTask(CtxDraw);
+            TaskDraw = new Task_Draw();
+            AddTask(TaskDraw);
         }
 
         public sealed class Task_Draw : Task<Flow_View>
@@ -345,10 +345,10 @@ namespace Uniflow.SimulatorExample
         public void Start()
         {
             // Phase 2: launch every task. Each StartFlow() puts one task on the pump.
-            _view.CtxDraw.StartFlow();
+            _view.TaskDraw.StartFlow();
             foreach (Flow_Runner r in _runners)
             {
-                r.CtxRun.StartFlow();
+                r.TaskRun.StartFlow();
             }
         }
 

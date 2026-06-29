@@ -3,8 +3,8 @@
 //
 // Each task is a struct deriving from uniflow::Task<Flow_LoadPicker>: it owns
 // the state its steps share AND the step member functions. The flow holds one
-// instance of each (ctx_pick_, ctx_place_), declared public so the orchestrator
-// can launch it with ctx.StartFlow(). A step reaches the flow's borrowed axes
+// instance of each (task_pick_, task_place_), declared public so the orchestrator
+// can launch it with task.StartFlow(). A step reaches the flow's borrowed axes
 // and peers through flow(); Entry() names the task's first step.
 //
 // The flow owns the motor axes it uses as pointers handed out by the
@@ -28,7 +28,7 @@ public:
     bool   Carrying()     const;
     bool   InsideZoneB()  const;
 
-    // -- Tasks (public so the orchestrator launches them with ctx.StartFlow()).
+    // -- Tasks (public so the orchestrator launches them with task.StartFlow()).
     //    Each owns its steps; steps reach the flow through flow(). --
 
     // Task: Pick (zone A) - approach, lower, grip, lift, then go idle.
@@ -44,7 +44,7 @@ public:
         StepResult Step5_HandGrip();
         StepResult Step6_CmdLiftWithPart();
         StepResult Step7_WaitAtPickUp();
-    } ctx_pick_;
+    } task_pick_;
 
     // Task: Place (zone B) - gated by Flow_Stage readiness + partner.
     struct Task_Place : uniflow::Task<Flow_LoadPicker>
@@ -61,7 +61,7 @@ public:
         StepResult Step7_WaitAtPlaceUp();
         StepResult Step8_CmdRetreat();
         StepResult Step9_WaitAtRetreat();
-    } ctx_place_;
+    } task_place_;
 
 private:
     // Defined out-of-line in uf_unload_picker.cpp once Flow_UnloadPicker is

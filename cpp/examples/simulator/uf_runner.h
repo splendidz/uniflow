@@ -34,7 +34,7 @@ public:
 
         double   VElapsedMs() const;          // virtual ms since phase_start_
         void     Publish(double percent, const char* step);
-    } ctx_run_;
+    } task_run_;
 
 private:
     static constexpr uniflow::Duration kGate{700};   // virtual-time waits (ms)

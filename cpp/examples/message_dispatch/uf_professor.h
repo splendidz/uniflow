@@ -23,7 +23,7 @@ public:
     const std::vector<Message>& Tasks() const { return tasks_; }
 
     // The single emitting task. Public so App::Start() launches it with
-    // ctx_emit_.StartFlow().
+    // task_emit_.StartFlow().
     struct Task_Emit : uniflow::Task<Flow_Professor>
     {
         StepResult Entry() override { return Step1_Arm(); }
@@ -31,7 +31,7 @@ public:
     private:
         StepResult Step1_Arm();    // schedule the first emission
         StepResult Step2_Tick();   // poll the gap; emit when due; Done when drained
-    } ctx_emit_;
+    } task_emit_;
 
 private:
     void ScheduleNext();

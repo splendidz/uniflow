@@ -20,7 +20,7 @@ public:
     explicit Flow_Weather(uniflow::Runtime& rt);
 
     // Fetch task: GET the KMA XML, then (optionally) summarise via Gemini.
-    // Public so app.Start() can launch it with ctx_fetch_.StartFlow().
+    // Public so app.Start() can launch it with task_fetch_.StartFlow().
     struct Task_Fetch : uniflow::Task<Flow_Weather>
     {
         StepResult Entry() override { return Step1_Fetch(); }
@@ -38,7 +38,7 @@ public:
 
         static std::string BuildPrompt(const std::string& body);
         static std::string Truncate(const std::string& s, std::size_t n);
-    } ctx_fetch_;
+    } task_fetch_;
 
 private:
     std::string html_;

@@ -15,7 +15,7 @@ using namespace uniflow;
 Flow_Student::Flow_Student(uniflow::Runtime& rt)
     : uniflow::Uniflow<Flow_Student>(rt, "Flow_Student")
 {
-    AddTask(ctx_drain_);
+    AddTask(task_drain_);
 }
 
 bool Flow_Student::BothSpawnersDone() const
