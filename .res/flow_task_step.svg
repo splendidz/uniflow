@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="864" height="620" viewBox="0 0 864 620" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#6366f1"/>
+    </marker>
+    <marker id="arrowIdle" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#cbd5e1"/>
+    </marker>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#4f46e5"/>
+      <stop offset="1" stop-color="#06b6d4"/>
+    </linearGradient>
+    <linearGradient id="flowFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#eef2ff"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="864" height="620" fill="#ffffff"/>
+
+  <!-- header -->
+  <rect x="60" y="34" width="44" height="6" rx="3" fill="url(#accent)"/>
+  <text x="60" y="74" font-size="28" font-weight="700" fill="#0f172a">Flow, Task, Step - the same shape, nested</text>
+  <text x="60" y="102" font-size="15" fill="#64748b">Many Flows; each Flow holds many Tasks; each Task is a chain of many Steps. Exactly one Task runs at a time.</text>
+
+  <!-- ===== Flow stack (many flows, layered) ===== -->
+  <rect x="124" y="156" width="680" height="340" rx="16" fill="#e0e7ff" stroke="#a5b4fc" stroke-width="1.5" opacity="0.5"/>
+  <rect x="104" y="176" width="680" height="340" rx="16" fill="#eef2ff" stroke="#a5b4fc" stroke-width="1.5" opacity="0.85"/>
+  <g filter="url(#soft)">
+    <rect x="84" y="196" width="680" height="340" rx="16" fill="url(#flowFill)" stroke="#6366f1" stroke-width="1.5"/>
+  </g>
+
+  <text x="108" y="228" font-size="18" font-weight="700" fill="#312e81">Flow</text>
+  <text x="108" y="248" font-size="12" fill="#64748b">an object in one state at a time - owns its state</text>
+  <rect x="632" y="210" width="120" height="24" rx="12" fill="#4f46e5"/>
+  <text x="692" y="226" text-anchor="middle" font-size="11.5" font-weight="700" fill="#ffffff">one of N Flows</text>
+
+  <!-- Task stack (active, layered = many tasks) -->
+  <rect x="124" y="272" width="612" height="108" rx="12" fill="#dcfce7" stroke="#86efac" stroke-width="1.2" opacity="0.75"/>
+  <rect x="112" y="284" width="612" height="108" rx="12" fill="#f1fdf5" stroke="#22c55e" stroke-width="1.4"/>
+  <text x="132" y="310" font-size="14" font-weight="700" fill="#166534">Task</text>
+  <rect x="214" y="296" width="150" height="18" rx="9" fill="#16a34a"/>
+  <text x="289" y="309" text-anchor="middle" font-size="10.5" font-weight="700" fill="#ffffff">1 of N - running now</text>
+
+  <rect x="132" y="336" width="72" height="32" rx="8" fill="#16a34a"/>
+  <text x="168" y="357" text-anchor="middle" font-size="11.5" font-weight="700" fill="#ffffff">Entry</text>
+  <line x1="204" y1="352" x2="230" y2="352" stroke="#6366f1" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <rect x="230" y="336" width="96" height="32" rx="8" fill="#ffffff" stroke="#c7d2fe"/>
+  <text x="278" y="357" text-anchor="middle" font-size="11.5" fill="#475569">Step 1</text>
+  <line x1="326" y1="352" x2="352" y2="352" stroke="#6366f1" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <rect x="352" y="336" width="96" height="32" rx="8" fill="#4f46e5"/>
+  <text x="400" y="357" text-anchor="middle" font-size="11.5" font-weight="700" fill="#ffffff">Step 2</text>
+  <line x1="448" y1="352" x2="474" y2="352" stroke="#6366f1" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <rect x="474" y="336" width="96" height="32" rx="8" fill="#ffffff" stroke="#c7d2fe"/>
+  <text x="522" y="357" text-anchor="middle" font-size="11.5" fill="#475569">Step 3</text>
+  <line x1="570" y1="352" x2="596" y2="352" stroke="#6366f1" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <rect x="596" y="336" width="72" height="32" rx="8" fill="#eef2ff" stroke="#c7d2fe"/>
+  <text x="632" y="357" text-anchor="middle" font-size="11.5" fill="#475569">Done</text>
+
+  <text x="132" y="384" font-size="11" fill="#64748b">Entry starts; Next() chains sibling Steps (x N); Done()/Fail() ends the Task.</text>
+
+  <!-- Task (idle) -->
+  <rect x="112" y="406" width="612" height="96" rx="12" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.4"/>
+  <text x="132" y="432" font-size="14" font-weight="700" fill="#94a3b8">Task</text>
+  <rect x="214" y="418" width="48" height="18" rx="9" fill="#e2e8f0"/>
+  <text x="238" y="431" text-anchor="middle" font-size="10.5" font-weight="700" fill="#64748b">idle</text>
+
+  <rect x="132" y="452" width="72" height="30" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="168" y="472" text-anchor="middle" font-size="11.5" fill="#94a3b8">Entry</text>
+  <line x1="204" y1="467" x2="230" y2="467" stroke="#cbd5e1" stroke-width="1.8" marker-end="url(#arrowIdle)"/>
+  <rect x="230" y="452" width="96" height="30" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="278" y="472" text-anchor="middle" font-size="11.5" fill="#94a3b8">Step 1</text>
+  <line x1="326" y1="467" x2="352" y2="467" stroke="#cbd5e1" stroke-width="1.8" marker-end="url(#arrowIdle)"/>
+  <rect x="352" y="452" width="96" height="30" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="400" y="472" text-anchor="middle" font-size="11.5" fill="#94a3b8">Step 2</text>
+  <line x1="448" y1="467" x2="474" y2="467" stroke="#cbd5e1" stroke-width="1.8" marker-end="url(#arrowIdle)"/>
+  <rect x="474" y="452" width="96" height="30" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="522" y="472" text-anchor="middle" font-size="11.5" fill="#94a3b8">Step 3</text>
+  <line x1="570" y1="467" x2="596" y2="467" stroke="#cbd5e1" stroke-width="1.8" marker-end="url(#arrowIdle)"/>
+  <rect x="596" y="452" width="72" height="30" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="632" y="472" text-anchor="middle" font-size="11.5" fill="#94a3b8">Done</text>
+
+  <text x="132" y="524" font-size="12" font-style="italic" fill="#475569">One Flow holds many Tasks (x N), but exactly one runs at a time.</text>
+
+  <!-- footer -->
+  <text x="60" y="590" font-size="12.5" font-style="italic" fill="#64748b">A Runtime (one pump thread) drives every Flow once per round; within a Flow, the active Task's Steps fire one per round.</text>
+</svg>

@@ -67,7 +67,7 @@ The goal of asynchronous processing overlaps with Boost.Asio and C++20 coroutine
 
 The primary value of uniflow is not asynchrony itself, but that it **formalizes the way you develop**.
 
-- **A flow / task skeleton that is enforced.** It guides developers to think in OOP terms - "this module is in exactly one state at a time," "this operation is composed of these steps." As features and code grow, everything keeps the same shape, so reviews stay consistent. Because code is written in the same structure regardless of a developer's skill or taste, the project is structurally prevented from turning into spaghetti over time.
+- **A flow / task skeleton that is enforced.** Every time you add a feature, the code does not even come together until you first decide "which exclusive unit (flow) does this belong to" and "which operation (task) is it, split into which steps." In other words, the framework forces one more round of OOP-level design on the developer. When you code freely at the language level, you reason in OOP terms while you have slack, but the moment a deadline closes in you tend to just add one more flag and wedge in one more conditional - whatever makes it work the fastest right now. That rushed code piles up and the structure collapses. In uniflow that shortcut is closed off, so whether you hand the work to an AI or write it yourself, the result is normalized into the same flow / task skeleton. As features and code grow, everything keeps the same shape, so reviews stay consistent; and because code is written in the same structure regardless of a developer's skill, taste, or that day's deadline pressure, the project is structurally prevented from turning into spaghetti over time.
 - **A built-in observer.** The framework exposes, as a trace, which step your code is in right now, which operation is in progress, and where it slows down. The execution flow is visible without any separate instrumentation. This is an application-oriented design you can use directly for debugging and operational observability.
 - **Use alongside other tools.** uniflow is, in the end, ordinary C++ code, so it can be used together with Asio or coroutines. You set the **development methodology** with uniflow, and bring in the right tool for areas like communication / IO within that frame.
 
@@ -75,13 +75,32 @@ In one line: **it asynchronizes your current logic in a formalized way, without 
 
 ---
 
+## The three concepts: Flow / Task / Step
+
+<p align="center">
+  <img src=".res/flow_task_step.svg" alt="Flow, Task, Step - the same shape nested: many Flows, each holding many Tasks, each Task a chain of Steps, exactly one Task running at a time" width="760"/>
+</p>
+
+uniflow deliberately has only three concepts. Everything else is machinery around them; once these three click, you have the whole model.
+
+**1) A Flow is an object that can run only one Task at a time.** One elevator car (while going up it cannot also go down), one traffic light, one communication link, one motor axis, one order processor. A Flow may hold many Tasks, but at any instant only one of them runs on it - that "one state at a time" object is a Flow. The test is simple: *can two operations overlap on it?* A whole car is a good counterexample, because drive and steering are controlled at the same time; there the car is not one Flow - the drive axis and the steering axis are each a Flow, and several Flows run together. (Running many Flows on a single thread is the heart of uniflow; see the "one thread, no locks" section below.)
+
+**2) A Task is a single unit of work that the Flow performs.** For a drive axis, "drive forward" and "drive backward" are Tasks; for an event processor, "handle event type A" is a Task. One Flow can hold several Tasks but runs only one at a time, and which Task is running is what determines the Flow's current role - this is the core of Flow exclusivity. A Task is "a finite chain of named Steps with a beginning and an end": it starts at `Entry`, chains through sibling Steps, and ends.
+
+**3) A Step is the atomic unit of a Task - a single function.** A Step runs from start to finish, never blocks or waits mid-way, and at the end answers what to do next with exactly one of four results:
+
+- `Next(...)` - advance to the next Step
+- `Stay()` - stay on this Step; call me again next round (this is how you wait without blocking - no `while`, no `sleep`)
+- `Done()` - this Task finished successfully
+- `Fail()` - this Task failed
+
+That is the entire vocabulary. And because a Step's declaration (its name in the list) is separated from its body, reading the function names top to bottom gives you the whole flow at a glance.
+
+---
+
 ## Quick Start
 
-A **Flow** models "a unit that cannot be in two states at once." A car cannot drive forward and backward at the same time - one car is one `Flow` class. An event processor cannot handle two events at once - that processor is one `Flow`. A physical device, a channel, a logical exclusive resource - anything where only one operation can run at a time can be expressed as a `Flow`.
-
-A **Task** is a concrete unit of work performed inside that `Flow`. For a car, "drive forward" and "drive backward" are Tasks; for an event processor, "handle event type A" is a Task. By declaring several Tasks on one `Flow`, the module's current role is determined by which Task is running. Tasks take turns but never run two at the same time - this is the core of `Flow` exclusivity.
-
-Looking at the declaration and the body separately makes the structure clear at a glance. The declaration (`struct`) is the skeleton of the flow, and the body goes below it (in a real project, in a `.cpp`).
+With the three concepts above in mind, here is the smallest complete flow. Looking at the declaration and the body separately makes the structure clear at a glance: the declaration (`struct`) is the skeleton of the flow, and the body goes below it (in a real project, in a `.cpp`).
 
 <details open>
 <summary><b>C++</b></summary>
