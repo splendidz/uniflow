@@ -199,8 +199,15 @@ private:
 // that runtime's scale / freeze.
 inline const VirtualClock& RealClock()
 {
-    static VirtualClock c;
-    return c;
+    // Immortal singleton: allocated once on first use and never destroyed, so
+    // the process real clock has no destructor to participate in the static
+    // destruction order. This closes the theoretical use-after-destruction
+    // window if a static-storage object touches the clock in its own
+    // destructor. The object lives for the whole process lifetime (its memory
+    // is reclaimed by the OS at exit), and the clock owns no resources that
+    // need releasing, so nothing is lost by not destroying it.
+    static VirtualClock* c = new VirtualClock();
+    return *c;
 }
 
 // ----- StepAction: a step returns an intent, not a state change -----
